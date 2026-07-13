@@ -15,6 +15,55 @@ the app builds and runs the streaming flow.
 
 ---
 
+## How you control the app
+
+The app can be driven four ways, and every action is reachable by more than one — so it
+works with a mouse, with the keyboard alone, or with VoiceOver.
+
+**Getting started.** On the launch screen, pick a preparation mode — **Start sooner**
+(streaming: playback begins after the first window while the rest prepares) or **Smoothest
+playback** (batch: the whole lecture prepares first) — then **Open Lecture** (or `⌘O`) and
+choose a video. You then land in the player.
+
+**On-screen controls.** The transport bar (Open · Find · Back 15 · Play/Pause · Forward 15 ·
+Mute · scrubber) and, below it, the caption row (Lecturer captions · AD captions · font size
+A/A · High contrast · Caption position · video zoom).
+
+**Menu bar / hardware.** All actions live in the **Playback**, **Audio Description**, **View**
+and **Help** menus. The hardware play/pause media key also controls the player, and every
+control has a VoiceOver label.
+
+**Keyboard shortcuts.** Two layers — fast **single keys** while the player is on screen (can
+be turned off for WCAG 2.1.4), and **menu-bar shortcuts** that always work even with single
+keys off. Press `⌘/` in the app for this list.
+
+| Action | Single key | Menu shortcut |
+| --- | --- | --- |
+| Play / pause | `Space` or `K` | `⌥⌘P` |
+| Back / forward 15 s | `J` / `L` | `⌥⌘J` / `⌥⌘L` |
+| Back / forward 5 s | `←` / `→` | `⌥⌘←` / `⌥⌘→` |
+| Mute / unmute | `M` | `⌥⌘U` |
+| Open another lecture | — | `⌘O` |
+| Play the offered description now | `D` | `⇧⌘D` |
+| Skip the description being spoken | `X` | `⌥⌘X` |
+| Replay the last description | `R` | `⌥⌘R` |
+| AD timing: Automatic / On-Demand / Off | — | `⌥⌘1` / `⌥⌘2` / `⌥⌘3` |
+| AD detail: Brief / Standard / Detailed | — | `⌥⌘7` / `⌥⌘8` / `⌥⌘9` |
+| Lecturer captions on/off | `C` | `⌥⌘C` |
+| AD captions on/off | `A` | `⌥⌘A` |
+| High-contrast captions on/off | `H` | `⌃⌘H` |
+| Larger / smaller captions | — | `⌘=` / `⌘-` |
+| Zoom video in / out | — | `⇧⌘=` / `⇧⌘-` |
+| Turn single-key shortcuts on/off | — | Playback menu |
+| Show this shortcut list | `?` | `⌘/` |
+| Close a sheet / menu | `Esc` | — |
+
+Two AD-specific behaviours: in **On-Demand** timing a "Description available — press D" badge
+appears and you choose when to hear each description; and the **detail level** can be changed
+mid-playback, which re-prepares and resumes where you were.
+
+---
+
 ## Improvements in this version
 
 ### Keyboard-only operation (WCAG 2.1.1 / 2.1.4)
