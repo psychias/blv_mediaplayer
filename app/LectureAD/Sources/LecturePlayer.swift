@@ -11,41 +11,39 @@ final class LecturePlayer: ObservableObject {
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var isPlaying = false
     @Published private(set) var isMuted = false
-    @Published private(set) var inExtendedDescription = false
-    @Published private(set) var activeExtended: Cue?
 
     let player = AVPlayer()
+    let ad = ADScheduler()
+    var inExtendedDescription: Bool { ad.isSpeaking }
+    var activeExtended: Cue? { ad.activeCue }
+
     private let videoURL: URL
     private let audioURL: URL
     private let captions: [Cue]
-    private let extendedCues: [Cue]
-    private let extendedOffsets: [Double]  // start offset of each rung-0 clip in ext.wav
-    private var extendedPlayer: AVAudioPlayer?
-    private var firedExtended = Set<Int>()
     private var timeObserver: Any?
+    private var adSub: AnyCancellable?
+    private var started = false
 
     init(videoURL: URL, artifacts: Artifacts, captions: [Cue], extended: [Cue]) {
         self.videoURL = videoURL
         self.audioURL = artifacts.audioURL
         self.captions = captions
-        self.extendedCues = extended
-        // ext.wav concatenates the rung-0 clips in cue order; offset = cumulative duration.
-        var running = 0.0
-        var offsets: [Double] = []
-        for cue in extended { offsets.append(running); running += (cue.end - cue.start) }
-        self.extendedOffsets = offsets
-
-        if let url = artifacts.extendedAudioURL {
-            extendedPlayer = try? AVAudioPlayer(contentsOf: url)
-            extendedPlayer?.prepareToPlay()
-        }
+        ad.add(cues: extended,
+               player: artifacts.extendedAudioURL.flatMap { try? AVAudioPlayer(contentsOf: $0) },
+               forKey: 0)
+        ad.pauseVideo = { [weak self] in self?.pause() }
+        ad.resumeVideo = { [weak self] in self?.play() }
+        ad.isVideoPlaying = { [weak self] in self?.isPlaying ?? false }
+        adSub = ad.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     deinit { if let o = timeObserver { player.removeTimeObserver(o) } }
 
     /// Build the video+enhanced-audio composition with modern async asset loading, then
-    /// start observing time and play. Call once from the view's `.task`.
+    /// start observing time and play. Idempotent — the view's `.task` may re-run.
     func start() async {
+        guard !started else { return }
+        started = true
         let video = AVURLAsset(url: videoURL)
         let audio = AVURLAsset(url: audioURL)
         let composition = AVMutableComposition()
@@ -76,8 +74,7 @@ final class LecturePlayer: ObservableObject {
     func pause() { player.pause(); isPlaying = false; MediaRemote.shared.update(isPlaying: false) }
     func seek(to seconds: Double) {
         let target = max(0, seconds)
-        // Re-arm any extended cues at/after the seek target so rewinding replays their AD.
-        firedExtended = Set(firedExtended.filter { extendedCues[$0].start < target })
+        ad.handleSeek(to: target)  // interrupts speech; re-arms cues so rewinding replays AD
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
     }
     func skip(_ delta: Double) { seek(to: currentTime + delta) }
@@ -90,39 +87,15 @@ final class LecturePlayer: ObservableObject {
     }
 
     /// Every cue with text, in time order — the find-in-lecture search corpus (⌘F).
-    var searchCues: [Cue] { (captions + extendedCues).sorted { $0.start < $1.start } }
+    var searchCues: [Cue] { (captions + ad.allCues).sorted { $0.start < $1.start } }
 
     /// Briefly lower the lecture audio (e.g. while VoiceOver speaks) so they don't collide (§8).
     func setDucked(_ ducked: Bool) { player.volume = ducked ? 0.25 : 1.0 }
 
     private func tick(_ time: Double) {
         currentTime = time
-        guard !inExtendedDescription else { return }
-        for (i, cue) in extendedCues.enumerated() where !firedExtended.contains(i) {
-            if time >= cue.start {
-                firedExtended.insert(i)
-                playExtended(index: i, cue: cue)
-                break
-            }
-        }
-    }
-
-    private func playExtended(index: Int, cue: Cue) {
-        guard let ext = extendedPlayer else { return }
-        let wasPlaying = isPlaying
-        pause()                              // pause the video for the extended description
-        inExtendedDescription = true
-        activeExtended = cue
-        ext.currentTime = extendedOffsets[index]
-        ext.play()
-        let duration = cue.end - cue.start
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-            ext.stop()
-            self?.inExtendedDescription = false
-            self?.activeExtended = nil
-            if wasPlaying { self?.play() }    // resume
-        }
+        ad.tick(now: time)
     }
 }
 
-extension LecturePlayer: Playable {}
+extension LecturePlayer: TransportControllable {}

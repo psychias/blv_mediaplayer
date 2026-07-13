@@ -19,10 +19,10 @@ struct CaptionsOverlay: View {
     private var cues: some View {
         VStack(spacing: 6) {
             if inExtended, let e = extended {
-                line("AD: \(e.text)", color: .yellow, label: "Audio description")
+                line("AD: \(e.text)", color: .captionYellow, label: "Audio description")
             }
             if settings.showAD, !inExtended, let a = ad {
-                line("AD: \(a.text)", color: .yellow, label: "Audio description")
+                line("AD: \(a.text)", color: .captionYellow, label: "Audio description")
             }
             if settings.showLecturer, let l = lecturer {
                 line(l.text, color: .white, label: "Lecturer")
@@ -35,7 +35,9 @@ struct CaptionsOverlay: View {
             .font(.system(size: settings.fontSize, weight: .semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Color.black.opacity(settings.highContrast ? 0.85 : 0.4))
+            // 0.8 is the audited AA floor over a worst-case (white) video frame; anything
+            // lower drops caption contrast below 4.5:1 (see scripts/contrast_audit.py).
+            .background(Color.black.opacity(settings.highContrast ? 0.95 : 0.8))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityLabel("\(label): \(s.replacingOccurrences(of: "AD: ", with: ""))")
     }
@@ -53,24 +55,23 @@ struct TransportControls: View {
     let onMute: () -> Void
     let onOpen: () -> Void
     let onSearch: () -> Void
+    @FocusState private var playFocused: Bool
 
     var body: some View {
         HStack(spacing: 16) {
+            // Shortcuts live in PlayerShortcutLayer + the menu bar (single source of truth),
+            // not on these buttons — double registration would fire actions twice.
             iconButton("Open another lecture", "folder.badge.plus", action: onOpen)
             iconButton("Find in lecture", "magnifyingglass", action: onSearch)
                 .keyboardShortcut("f", modifiers: .command)
             Divider().frame(height: 18)
             iconButton("Back 15 seconds", "gobackward.15") { onSkip(-15) }
-                .keyboardShortcut("j", modifiers: [])
             iconButton(isPlaying ? "Pause" : "Play", isPlaying ? "pause.fill" : "play.fill",
                        action: onPlayPause)
-                .keyboardShortcut(.space, modifiers: [])
-                .keyboardShortcut("k", modifiers: [])  // also k (play/pause)
+                .focused($playFocused)
             iconButton("Forward 15 seconds", "goforward.15") { onSkip(15) }
-                .keyboardShortcut("l", modifiers: [])
             iconButton(isMuted ? "Unmute" : "Mute",
                        isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill", action: onMute)
-                .keyboardShortcut("m", modifiers: [])
             Slider(value: Binding(get: { currentTime }, set: onSeek), in: 0...max(1, duration))
                 .accessibilityLabel("Seek")
                 .accessibilityValue(timeString(currentTime))
@@ -78,8 +79,10 @@ struct TransportControls: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial)   // neutral bar (not blue), blue accents only
+        .background(Color.barBackground)   // solid, AA-audited (material is indeterminate)
+        .overlay(alignment: .top) { Divider() }
         .tint(.brandBlue)
+        .defaultFocus($playFocused, true)  // keyboard users land on Play/Pause first
     }
 }
 
@@ -106,8 +109,30 @@ struct CaptionControlBar: View {
         .toggleStyle(.checkbox)
         .padding(12)
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial)   // neutral bar (not blue), blue accents only
+        .background(Color.barBackground)   // solid, AA-audited (material is indeterminate)
+        .overlay(alignment: .top) { Divider() }
         .tint(.brandBlue)
+    }
+}
+
+/// On-demand AD indicator: a description is waiting for the D key (§8). White on brandBlue
+/// (11.37:1, audited in scripts/contrast_audit.py).
+struct DescriptionAvailableBadge: View {
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                Text("Description available — press D")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color.brandBlue)
+                    .clipShape(Capsule())
+                    .accessibilityLabel("Audio description available. Press D to hear it.")
+            }
+            Spacer()
+        }
+        .padding(16)
     }
 }
 

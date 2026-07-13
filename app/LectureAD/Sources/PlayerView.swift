@@ -2,17 +2,11 @@ import SwiftUI
 
 /// Batch player: plays one finished cached artifact (video + enhanced audio + captions).
 struct PlayerView: View {
-    @StateObject private var player: LecturePlayer
+    // Owned by AppModel (so menu commands can reach it); start() is idempotent.
+    @ObservedObject var player: LecturePlayer
     @EnvironmentObject private var settings: CaptionSettings
     @EnvironmentObject private var model: AppModel
     @State private var showSearch = false
-
-    init(videoURL: URL, artifacts: Artifacts) {
-        let captions = VTT.parse(artifacts.captionsURL)
-        let extended = VTT.parse(artifacts.descriptionsURL)
-        _player = StateObject(wrappedValue: LecturePlayer(
-            videoURL: videoURL, artifacts: artifacts, captions: captions, extended: extended))
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +15,10 @@ struct PlayerView: View {
                 CaptionsOverlay(lecturer: player.activeLecturer(), ad: player.activeAD(),
                                 extended: player.activeExtended, inExtended: player.inExtendedDescription,
                                 settings: settings)
+                if player.ad.pendingCue != nil {
+                    DescriptionAvailableBadge()
+                }
+                PlayerShortcutLayer()
             }
             TransportControls(
                 isPlaying: player.isPlaying, isMuted: player.isMuted,

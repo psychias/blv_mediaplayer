@@ -21,8 +21,12 @@ dependencies = [
 real = [
     "mlx-whisper>=0.4",  # transcription on the GPU (Apple Silicon) — the first-open speed-up
     "openai-whisper>=20240930",  # CPU fallback whisper backend
-    "mlx-vlm>=0.1.30",  # VL via MLX (GPU-resident vision); pin past Gemma-4 PLE-quant fix (§6)
-    "mlx-audio>=0.2.0",
+    # Pin the MLX stack exactly: mlx 0.32 breaks the 4-bit Qwen3-VL quant (garbage
+    # output on long prompts) and mlx-vlm 0.6.4 stopped attaching PIL images — both
+    # silently suppress ALL audio description. This trio is the validated set.
+    "mlx==0.31.2",
+    "mlx-vlm==0.6.3",  # VL via MLX (GPU-resident vision)
+    "mlx-audio==0.4.4",
     "mistral-common[audio]>=1.5",  # Voxtral tekken tokenizer (required by mlx-audio Voxtral)
     "silero-vad>=5.1",
     # Keep torch and torchaudio on the SAME minor line — a mismatch (e.g. torch 2.12 vs

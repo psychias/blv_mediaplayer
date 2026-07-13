@@ -11,8 +11,8 @@ struct ContentView: View {
                 ChooseView()
             case let .preparing(stage, pct, label):
                 PrepareView(stage: stage, pct: pct, label: label)
-            case let .ready(videoURL, artifacts):
-                PlayerView(videoURL: videoURL, artifacts: artifacts)
+            case let .ready(player):
+                PlayerView(player: player)
             case let .streaming(player):
                 StreamingPlayerView(player: player)
             case let .failed(message):
@@ -26,6 +26,7 @@ struct ContentView: View {
                       allowsMultipleSelection: false) { result in
             if case let .success(urls) = result, let url = urls.first { model.open(url) }
         }
+        .sheet(isPresented: $model.showKeyboardHelp) { KeyboardHelpView() }
         // Closing the window must stop playback and the sidecar — otherwise the audio
         // (and any in-progress preparation) keeps running after the window is gone.
         .onDisappear { model.reset() }
@@ -34,6 +35,7 @@ struct ContentView: View {
 
 struct ChooseView: View {
     @EnvironmentObject var model: AppModel
+    @FocusState private var openFocused: Bool
 
     var body: some View {
         VStack(spacing: 24) {
@@ -44,7 +46,7 @@ struct ChooseView: View {
                 Text("Lecture AD Player").font(.largeTitle).bold().foregroundStyle(Color.brandBlue)
             }
             Text("Open a recorded lecture to add audio description.")
-                .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).foregroundStyle(Color.textSecondary)
 
             VStack(spacing: 8) {
                 Picker("Preparation mode", selection: $model.smoothPlayback) {
@@ -59,7 +61,7 @@ struct ChooseView: View {
                 Text(model.smoothPlayback
                      ? "Prepares the whole lecture first, then plays smoothly with no slowdown."
                      : "Starts after the first part is ready; the rest prepares as you watch.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
                     .accessibilityHidden(true)  // conveyed by the picker's value/hint
             }
@@ -70,12 +72,14 @@ struct ChooseView: View {
             Button("Open Lecture…") { model.requestOpen() }
                 .buttonStyle(.borderedProminent)
                 .tint(.brandBlue)
+                .focused($openFocused)
                 .accessibilityLabel("Open lecture video")
                 .accessibilityHint("Choose a lecture video file to prepare audio description")
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.white)
+        .defaultFocus($openFocused, true)
     }
 }
 

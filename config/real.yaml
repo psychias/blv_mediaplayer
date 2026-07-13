@@ -34,7 +34,7 @@ vl:
   model: /Users/steliospsychias/Desktop/bvl_mediaplayer/models/qwen3vl-2b-4bit
   image_max_side: 384   # smaller keyframe -> faster per-window VL (lowers GPU duty cycle)
   max_ad_words: 14   # cap verbose base-model AD (stand-in for the fine-tune); faster TTS
-  verbosity: balanced  # AD level of detail: minimal | balanced | expansive
+  verbosity: standard  # AD detail level: brief | standard | detailed
 
 preprocess:
   whisper_backend: mlx   # GPU on Apple Silicon — the big first-open speed-up

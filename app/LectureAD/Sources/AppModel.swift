@@ -9,9 +9,15 @@ final class AppModel: ObservableObject {
     enum Phase {
         case idle
         case preparing(stage: String, pct: Double, label: String)
-        case ready(videoURL: URL, artifacts: Artifacts)      // batch
+        case ready(player: LecturePlayer)                    // batch
         case streaming(player: StreamingPlayer)              // streaming
         case failed(String)
+    }
+
+    enum Verbosity: String, CaseIterable, Identifiable {
+        case brief, standard, detailed
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
     }
 
     @Published var phase: Phase = .idle
@@ -21,14 +27,59 @@ final class AppModel: ObservableObject {
     // whole lecture first, then play from the cache with NO inference — smoothest on low-RAM
     // Macs). Seeded from the env/config default (LADPIPE_STREAM) in init.
     @Published var smoothPlayback = false
+    @Published var showKeyboardHelp = false
+
+    /// AD detail level (generation-time; switching re-prepares via the sidecar, §8).
+    @Published private(set) var verbosity: Verbosity {
+        didSet { UserDefaults.standard.set(verbosity.rawValue, forKey: "adVerbosity") }
+    }
+    /// When the AD talks: automatic (pause & describe), on-demand (D key), or off.
+    @Published var adMode: ADScheduler.Mode {
+        didSet {
+            UserDefaults.standard.set(adMode.rawValue, forKey: "adMode")
+            activeTransport?.ad.mode = adMode
+        }
+    }
+    /// WCAG 2.1.4 escape hatch: single-character player shortcuts can be turned off
+    /// (every action stays reachable through the menu bar's modifier shortcuts).
+    @Published var singleKeyShortcuts: Bool {
+        didSet { UserDefaults.standard.set(singleKeyShortcuts, forKey: "singleKeyShortcuts") }
+    }
+
     private let sidecar = SidecarController()
     private let announcer = Announcer()
     private var streamingPlayer: StreamingPlayer?
+    private var batchPlayer: LecturePlayer?
+    private(set) var currentVideoURL: URL?
     // Held while preparing so macOS App Nap can't suspend the app (and its sidecar) when the
     // window loses focus — that was silently freezing long preparations.
     private var activity: NSObjectProtocol?
 
-    init() { smoothPlayback = !useStreaming }
+    init() {
+        let d = UserDefaults.standard
+        verbosity = Verbosity(rawValue: d.string(forKey: "adVerbosity") ?? "") ?? .standard
+        adMode = ADScheduler.Mode(rawValue: d.string(forKey: "adMode") ?? "") ?? .auto
+        singleKeyShortcuts = d.object(forKey: "singleKeyShortcuts") as? Bool ?? true
+        smoothPlayback = !useStreaming
+    }
+
+    /// Whichever player is on screen — the target for menu / keyboard commands.
+    var activeTransport: (any TransportControllable)? {
+        if let s = streamingPlayer { return s }
+        return batchPlayer
+    }
+
+    // MARK: menu / keyboard actions (safe no-ops when no player is active)
+    func playPause() { activeTransport?.playPause() }
+    func skipBack15() { activeTransport?.skip(-15) }
+    func skipForward15() { activeTransport?.skip(15) }
+    func seekBack5() { activeTransport?.skip(-5) }
+    func seekForward5() { activeTransport?.skip(5) }
+    func toggleMute() { activeTransport?.toggleMute() }
+    func playDescriptionNow() { activeTransport?.ad.playPendingNow() }
+    func skipDescription() { activeTransport?.ad.skipCurrent() }
+    func replayDescription() { activeTransport?.ad.replayLast() }
+    func toggleHelp() { showKeyboardHelp.toggle() }
 
     private func beginActivity() {
         if activity == nil {
@@ -66,29 +117,83 @@ final class AppModel: ObservableObject {
     func open(_ videoURL: URL) {
         sidecar.cancel()          // stop any in-progress preparation for the previous lecture
         streamingPlayer = nil
+        batchPlayer = nil
+        currentVideoURL = videoURL
         beginActivity()
         phase = .preparing(stage: "start", pct: 0, label: "Preparing audio description")
         announcer.announce("Preparing audio description", force: true)
         smoothPlayback ? openBatch(videoURL) : openStreaming(videoURL)
     }
 
-    func reset() { sidecar.cancel(); streamingPlayer = nil; endActivity(); phase = .idle }
+    func reset() {
+        sidecar.cancel()
+        streamingPlayer = nil
+        batchPlayer = nil
+        currentVideoURL = nil
+        endActivity()
+        phase = .idle
+    }
+
+    /// Change the AD detail level. Generation-time: re-runs the sidecar for the current
+    /// lecture at the new level (cached windows replay instantly) and resumes near the
+    /// playhead. With no lecture open it simply applies to the next one.
+    func setVerbosity(_ v: Verbosity) {
+        guard v != verbosity else { return }
+        verbosity = v
+        guard let url = currentVideoURL else { return }
+        announcer.announce("Changing description detail to \(v.label). Re-preparing descriptions.",
+                           force: true)
+        if !smoothPlayback {
+            let resumeAt = activeTransport?.currentTime ?? 0
+            sidecar.cancel()
+            beginActivity()
+            let player = makeStreamingPlayer(videoURL: url)
+            player.pendingResumeTime = resumeAt > 1 ? resumeAt : nil
+            streamingPlayer = player
+            phase = .streaming(player: player)  // keep the player UI up; no bounce to PrepareView
+            startStreamingSidecar(videoURL: url, player: player)
+            // Prime the pacer past the already-watched windows, or it would stall two
+            // windows in while the playhead waits at the resume position.
+            sidecar.grantCredits(Int(ceil(resumeAt / 90)))
+        } else {
+            open(url)  // batch: a previously-used level comes back as a cache_hit
+        }
+    }
+
+    private func configureAD(_ ad: ADScheduler) {
+        ad.mode = adMode
+        ad.announce = { [weak self] in self?.announcer.announce($0) }
+    }
 
     // MARK: streaming
-    private func openStreaming(_ videoURL: URL) {
+    private func makeStreamingPlayer(videoURL: URL) -> StreamingPlayer {
         // The player grants a pacing credit (stdin) each time the playhead enters a new
         // window, keeping the engine ~2 windows ahead — so the GPU stays free for playback.
         let player = StreamingPlayer(videoURL: videoURL) { [weak self] in self?.sidecar.grantCredit() }
-        streamingPlayer = player
+        configureAD(player.ad)
+        return player
+    }
+
+    private func startStreamingSidecar(videoURL: URL, player: StreamingPlayer) {
         var args = ["stream", "--video", videoURL.path, "--config", configPath,
-                    "--window", "90", "--lookahead", "2", "--json"]
+                    "--window", "90", "--lookahead", "2", "--json",
+                    "--verbosity", verbosity.rawValue]
         if useMock { args.append("--mock") }
         sidecar.prepare(command: sidecarCommand, arguments: args) { [weak self] event in
             self?.handleStream(event, player: player)
         }
     }
 
+    private func openStreaming(_ videoURL: URL) {
+        let player = makeStreamingPlayer(videoURL: videoURL)
+        streamingPlayer = player
+        startStreamingSidecar(videoURL: videoURL, player: player)
+    }
+
     private func handleStream(_ event: SidecarEvent, player: StreamingPlayer) {
+        // Events from a terminated sidecar (verbosity switch, new lecture) must not
+        // resurrect its stale player.
+        guard player === streamingPlayer else { return }
         switch event {
         case let .progress(stage, pct, label):
             if case .streaming = phase {} else {
@@ -97,10 +202,15 @@ final class AppModel: ObservableObject {
             }
         case let .windowReady(window):
             let first = player.totalReady == 0
-            Task { await player.addWindow(window) }
+            player.enqueueWindow(window)
             if first {
-                announcer.announce("Starting playback. The rest prepares as you watch.", force: true)
-                phase = .streaming(player: player)
+                if case .streaming = phase {
+                    // verbosity restart: the player UI is already up — no announcement
+                } else {
+                    announcer.announce("Starting playback. The rest prepares as you watch.",
+                                       force: true)
+                    phase = .streaming(player: player)
+                }
             }
         case .streamDone:
             endActivity()
@@ -116,7 +226,8 @@ final class AppModel: ObservableObject {
 
     // MARK: batch
     private func openBatch(_ videoURL: URL) {
-        var args = ["run", "--video", videoURL.path, "--config", configPath, "--json"]
+        var args = ["run", "--video", videoURL.path, "--config", configPath, "--json",
+                    "--verbosity", verbosity.rawValue]
         if useMock { args.append("--mock") }
         sidecar.prepare(command: sidecarCommand, arguments: args) { [weak self] event in
             self?.handleBatch(event, videoURL: videoURL)
@@ -134,8 +245,14 @@ final class AppModel: ObservableObject {
                 audioURL: URL(fileURLWithPath: a), captionsURL: URL(fileURLWithPath: c),
                 descriptionsURL: URL(fileURLWithPath: d), extendedAudioURL: extendedAudioURL(a),
                 manifestURL: URL(fileURLWithPath: m))
+            let player = LecturePlayer(
+                videoURL: videoURL, artifacts: artifacts,
+                captions: VTT.parse(artifacts.captionsURL),
+                extended: VTT.parse(artifacts.descriptionsURL))
+            configureAD(player.ad)
+            batchPlayer = player
             announcer.announce("Audio description ready. Playing.", force: true)
-            phase = .ready(videoURL: videoURL, artifacts: artifacts)
+            phase = .ready(player: player)
         case let .error(message):
             endActivity()
             announcer.announce("Preparation failed. \(message)", force: true)

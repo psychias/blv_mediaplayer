@@ -13,7 +13,7 @@ import logging
 import sys
 from pathlib import Path
 
-from .config import Backends, Config, ConfigError, load_config
+from .config import VERBOSITY_LEVELS, Backends, Config, ConfigError, load_config
 from .orchestrator import PrepareThenCacheOrchestrator
 from .types import PipelineResult
 
@@ -60,6 +60,10 @@ def _load(args: argparse.Namespace) -> Config:
     config = load_config(Path(args.config))
     if args.mock:
         config = dataclasses.replace(config, backends=Backends("mock", "mock", "mock"))
+    if getattr(args, "verbosity", None):
+        config = dataclasses.replace(
+            config, vl=dataclasses.replace(config.vl, verbosity=args.verbosity)
+        )
     return config
 
 
@@ -187,6 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--mock", action="store_true", help="force all backends to mock")
     run.add_argument("--config", default=str(DEFAULT_CONFIG), help="path to config YAML")
     run.add_argument("--json", action="store_true", help="emit newline-delimited JSON events")
+    run.add_argument("--verbosity", choices=sorted(VERBOSITY_LEVELS), default=None,
+                     help="AD detail level (overrides vl.verbosity)")
 
     stream = sub.add_parser("stream", help="prepare in windows; emit window_ready events (§12)")
     stream.add_argument("--video", required=True, help="path to the lecture video")
@@ -197,6 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="bounded lookahead: prepare this many windows ahead, then wait for "
                              "a credit line on stdin (0 = unbounded, prepare flat-out)")
     stream.add_argument("--json", action="store_true", help="emit newline-delimited JSON events")
+    stream.add_argument("--verbosity", choices=sorted(VERBOSITY_LEVELS), default=None,
+                        help="AD detail level (overrides vl.verbosity)")
     return parser
 
 

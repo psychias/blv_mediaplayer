@@ -32,7 +32,14 @@ final class SidecarController {
 
     /// Grant the streaming engine one more window of lookahead (a credit line on its stdin).
     func grantCredit() {
-        stdinHandle?.write("ok\n".data(using: .utf8)!)
+        guard let handle = stdinHandle else { return }
+        try? handle.write(contentsOf: Data("ok\n".utf8))  // broken pipe (dead sidecar) is fine
+    }
+
+    /// Prime several credits at once (resume after a restart: the pacer must be able to
+    /// run straight through the already-watched windows to the playhead's window).
+    func grantCredits(_ n: Int) {
+        for _ in 0..<max(0, n) { grantCredit() }
     }
 
     /// Runs `ladpipe run --video <video> --config <config> --json [--mock]`.
@@ -91,6 +98,7 @@ final class SidecarController {
     }
 
     func cancel() {
+        stdinHandle = nil   // immediately: a stale pacer must not receive new credits
         process?.terminate()
         process = nil
     }

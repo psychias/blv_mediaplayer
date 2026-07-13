@@ -63,17 +63,16 @@ SLIDE OCR TEXT (may be empty — read the slide directly):
 {ocr}
 """
 
-# User-selectable level of detail (MAVP-style minimal | balanced | expansive). Only the
-# style line changes; the emit criteria stay identical across levels.
-_STYLE = {
-    "minimal": (
-        "present tense, third person, ONE very short spoken sentence (at most 12 words), "
-        "plain and concrete — only the single most important visual fact."
+# User-selectable AD detail level (vl.verbosity, §8): same rules, different style budget.
+_STYLE_BY_VERBOSITY = {
+    "brief": (
+        "present tense, third person, ONE very short spoken sentence (about ten words), "
+        "only the single most important uncovered fact."
     ),
-    "balanced": "present tense, third person, ONE short spoken sentence, plain and concrete.",
-    "expansive": (
-        "present tense, third person, one to two short spoken sentences (at most 35 words), "
-        "plain and concrete — include the key labels or values the student needs."
+    "standard": "present tense, third person, ONE short spoken sentence, plain and concrete.",
+    "detailed": (
+        "present tense, third person, one to three short spoken sentences covering the "
+        "key labeled parts and relationships in reading order; concrete, no filler."
     ),
 }
 
@@ -102,9 +101,9 @@ def condense_rules(rules: str) -> str:
     return "\n".join(statements) if statements else rules.strip()
 
 
-def build_prompt(moment: Moment, rules: str, verbosity: str = "balanced") -> str:
+def build_prompt(moment: Moment, rules: str, verbosity: str = "standard") -> str:
     return _INSTRUCTION.format(
-        style=_STYLE.get(verbosity, _STYLE["balanced"]),
+        style=_STYLE_BY_VERBOSITY.get(verbosity, _STYLE_BY_VERBOSITY["standard"]),
         rules=condense_rules(rules) or "(no rules provided)",
         transcript=moment.transcript_window.strip() or "(silence)",
         ocr=moment.ocr_text.strip() or "(none — read the slide directly)",
@@ -156,7 +155,7 @@ def parse_decision(raw: str) -> ADDecision:
 
 
 class MlxVlmBackend:
-    def __init__(self, model: str, image_max_side: int = 768, verbosity: str = "balanced") -> None:
+    def __init__(self, model: str, image_max_side: int = 768, verbosity: str = "standard") -> None:
         self._model_ref = model
         self._image_max_side = image_max_side
         self._verbosity = verbosity

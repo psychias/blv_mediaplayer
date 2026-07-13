@@ -40,7 +40,7 @@ vl:
   model: mlx-community/Qwen3-VL-2B-Instruct-4bit
   image_max_side: 768
   max_ad_words: 0    # 0 = no cap; set e.g. 14 to bound verbose AD (faster TTS, §7)
-  verbosity: balanced  # AD level of detail: minimal | balanced | expansive
+  verbosity: standard  # AD detail level: brief | standard | detailed
   model_large: ""               # optional richer model used on >= model_large_min_ram_gb
   model_large_min_ram_gb: 16
 

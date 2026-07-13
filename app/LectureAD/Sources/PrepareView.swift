@@ -26,7 +26,7 @@ struct PrepareView: View {
                 .frame(maxWidth: 400)
                 .accessibilityLabel("Preparation progress")
                 .accessibilityValue("\(Int(pct * 100)) percent")
-            Text(label).foregroundStyle(.secondary)
+            Text(label).foregroundStyle(Color.textSecondary)
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

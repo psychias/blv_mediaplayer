@@ -26,6 +26,10 @@ struct LectureADApp: App {
                 Button("Open Lecture…") { model.requestOpen() }
                     .keyboardShortcut("o", modifiers: .command)
             }
+            PlaybackCommands(model: model)
+            AudioDescriptionCommands(model: model)
+            CaptionCommands(model: model, settings: captionSettings)
+            HelpCommands(model: model)
         }
     }
 }

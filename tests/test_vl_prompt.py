@@ -26,15 +26,29 @@ def test_prompt_includes_rules_transcript_and_ocr() -> None:
     assert '"emit"' in prompt  # asks for the JSON contract
 
 
+def test_prompt_default_is_standard() -> None:
+    assert "ONE short spoken sentence" in build_prompt(_moment(), rules="")
+
+
+def test_prompt_brief_style() -> None:
+    prompt = build_prompt(_moment(), rules="", verbosity="brief")
+    assert "very short spoken sentence" in prompt
+    assert "single most important uncovered fact" in prompt
+
+
+def test_prompt_detailed_allows_multiple_sentences() -> None:
+    prompt = build_prompt(_moment(), rules="", verbosity="detailed")
+    assert "one to three short spoken sentences" in prompt
+
+
+def test_prompt_unknown_verbosity_falls_back_to_standard() -> None:
+    assert "ONE short spoken sentence" in build_prompt(_moment(), rules="", verbosity="bogus")
+
+
 def test_prompt_verbosity_changes_style_line_only() -> None:
-    minimal = build_prompt(_moment(), rules="", verbosity="minimal")
-    balanced = build_prompt(_moment(), rules="")  # default
-    expansive = build_prompt(_moment(), rules="", verbosity="expansive")
-    assert "at most 12 words" in minimal
-    assert "ONE short spoken sentence" in balanced
-    assert "one to two short spoken sentences" in expansive
     # the emit criteria stay identical across levels
-    for p in (minimal, balanced, expansive):
+    for verbosity in ("brief", "standard", "detailed"):
+        p = build_prompt(_moment(), rules="", verbosity=verbosity)
         assert "set emit=false" in p and '"emit"' in p
 
 

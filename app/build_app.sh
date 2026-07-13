@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 APP="${1:-build/LectureAD.app}"
 SRC=(LectureAD/Sources/*.swift)
-DEPLOY_TARGET="arm64-apple-macosx13.0"
+DEPLOY_TARGET="arm64-apple-macosx14.0"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

@@ -13,11 +13,16 @@ final class StreamingPlayer: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isMuted = false
     @Published private(set) var isBuffering = false
-    @Published private(set) var inExtendedDescription = false
-    @Published private(set) var activeExtended: Cue?
     @Published private(set) var totalReady: Double = 0  // global seconds prepared so far
 
     let player = AVPlayer()
+    let ad = ADScheduler()
+    var inExtendedDescription: Bool { ad.isSpeaking }
+    var activeExtended: Cue? { ad.activeCue }
+    /// Set on a sidecar restart (AD-verbosity switch): once the prepared range reaches
+    /// this time, seek there and resume playback (§8).
+    var pendingResumeTime: Double?
+
     private let videoURL: URL
     private let grantCredit: () -> Void
     private let composition = AVMutableComposition()
@@ -26,12 +31,10 @@ final class StreamingPlayer: ObservableObject {
 
     private var windows: [StreamWindowInfo] = []
     private var captions: [Cue] = []
-    private struct Ext { let cue: Cue; let dur: Double; let offset: Double; let window: Int }
-    private var extEntries: [Ext] = []
-    private var extPlayers: [Int: AVAudioPlayer] = [:]
-    private var fired: Set<Int> = []
     private var enteredWindow = -1
     private var observer: Any?
+    private var adSub: AnyCancellable?
+    private var addChain: Task<Void, Never>?
 
     init(videoURL: URL, grantCredit: @escaping () -> Void) {
         self.videoURL = videoURL
@@ -39,6 +42,10 @@ final class StreamingPlayer: ObservableObject {
         videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
         audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
         player.actionAtItemEnd = .pause  // hitting the end of the prepared range must NOT loop to 0
+        ad.pauseVideo = { [weak self] in self?.pause() }
+        ad.resumeVideo = { [weak self] in self?.play() }
+        ad.isVideoPlaying = { [weak self] in self?.isPlaying ?? false }
+        adSub = ad.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         let interval = CMTime(seconds: 0.2, preferredTimescale: 600)
         observer = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -48,18 +55,20 @@ final class StreamingPlayer: ObservableObject {
 
     deinit { if let o = observer { player.removeTimeObserver(o) } }
 
+    /// Serialise addWindow calls: cached windows replay in a rapid burst on a sidecar
+    /// restart, and unordered Tasks could append them out of order.
+    func enqueueWindow(_ w: StreamWindowInfo) {
+        let prev = addChain
+        addChain = Task { await prev?.value; await self.addWindow(w) }
+    }
+
     /// Append a freshly-prepared window onto the global timeline.
     func addWindow(_ w: StreamWindowInfo) async {
         captions += VTT.parse(w.captionsURL).filter { $0.kind != .extended }
         let ext = VTT.parse(w.descriptionsURL).filter { $0.kind == .extended }
-        if !ext.isEmpty {
-            var running = 0.0
-            for c in ext {
-                extEntries.append(Ext(cue: c, dur: c.end - c.start, offset: running, window: w.index))
-                running += (c.end - c.start)
-            }
-            if let url = w.extendedAudioURL { extPlayers[w.index] = try? AVAudioPlayer(contentsOf: url) }
-        }
+        ad.add(cues: ext,
+               player: w.extendedAudioURL.flatMap { try? AVAudioPlayer(contentsOf: $0) },
+               forKey: w.index)
 
         let video = AVURLAsset(url: videoURL)
         let audio = AVURLAsset(url: w.audioURL)
@@ -79,6 +88,12 @@ final class StreamingPlayer: ObservableObject {
         totalReady = w.tEnd
         isBuffering = false
         refreshItem(startIfFirst: windows.count == 1)
+        // Sidecar restart (verbosity switch): resume where the user was once we've caught up.
+        if let t = pendingResumeTime, totalReady >= t {
+            pendingResumeTime = nil
+            seek(to: t)
+            play()
+        }
     }
 
     /// Re-point the player at the grown composition, preserving the playhead.
@@ -102,8 +117,7 @@ final class StreamingPlayer: ObservableObject {
     func pause() { player.pause(); isPlaying = false; MediaRemote.shared.update(isPlaying: false) }
     func seek(to t: Double) {
         let clamped = max(0, min(t, totalReady))
-        // Re-arm any extended cues at/after the seek target so rewinding replays their AD.
-        fired = Set(fired.filter { extEntries[$0].cue.start < clamped })
+        ad.handleSeek(to: clamped)  // interrupts speech; re-arms cues so rewinding replays AD
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
     }
     func skip(_ delta: Double) { seek(to: currentTime + delta) }
@@ -117,7 +131,7 @@ final class StreamingPlayer: ObservableObject {
     }
 
     /// Every prepared cue with text, in time order — the find-in-lecture search corpus (⌘F).
-    var searchCues: [Cue] { (captions + extEntries.map { $0.cue }).sorted { $0.start < $1.start } }
+    var searchCues: [Cue] { (captions + ad.allCues).sorted { $0.start < $1.start } }
 
     private func tick() {
         currentTime = player.currentTime().seconds
@@ -131,28 +145,8 @@ final class StreamingPlayer: ObservableObject {
             grantCredit()
         }
 
-        guard !inExtendedDescription else { return }
-        for (i, e) in extEntries.enumerated() where !fired.contains(i) && currentTime >= e.cue.start {
-            fired.insert(i)
-            if let p = extPlayers[e.window] { playExtended(p, e) }
-            break
-        }
-    }
-
-    private func playExtended(_ ext: AVAudioPlayer, _ e: Ext) {
-        let wasPlaying = isPlaying
-        pause()
-        inExtendedDescription = true
-        activeExtended = e.cue
-        ext.currentTime = e.offset
-        ext.play()
-        DispatchQueue.main.asyncAfter(deadline: .now() + e.dur) { [weak self] in
-            ext.stop()
-            self?.inExtendedDescription = false
-            self?.activeExtended = nil
-            if wasPlaying { self?.play() }
-        }
+        ad.tick(now: currentTime)
     }
 }
 
-extension StreamingPlayer: Playable {}
+extension StreamingPlayer: TransportControllable {}

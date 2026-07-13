@@ -93,8 +93,19 @@ class ChunkedStreamingOrchestrator:
         rules = cfg.rules_file.read_text() if cfg.rules_file else ""
 
         windows_meta: list[dict[str, object]] = []
-        source = self._source().windows(video_path, self._window_s, progress)
-        index = 0
+        # Replay windows a previous run with the same key already finished (sidecar
+        # restarts, e.g. the app switching AD verbosity back to a level it used before).
+        # Replayed windows don't consume pacer credits — they cost no GPU work, and
+        # burning the lookahead on them would stall the resume before any live window.
+        replayed = self._replay_cached(out_dir, key)
+        for result in replayed:
+            windows_meta.append(_window_dict(result))
+            progress.progress("window", 0.0, f"Window {result.index} ready (cached)")
+            yield result
+
+        start = len(replayed)
+        source = self._source().windows(video_path, self._window_s, progress, start_index=start)
+        index = start
         while True:
             if pacer is not None:
                 pacer.wait(index)  # bounded lookahead: don't run ahead of the playhead
@@ -108,6 +119,45 @@ class ChunkedStreamingOrchestrator:
             progress.progress("window", 0.0, f"Window {window.index} ready")
             yield result
             index += 1
+
+    def _replay_cached(self, out_dir: Path, key: str) -> list[WindowResult]:
+        """The longest 0..n consecutive prefix of already-finished windows on disk."""
+        manifest_path = out_dir / "stream.json"
+        if not manifest_path.exists():
+            return []
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(manifest, dict) or manifest.get("cache_key") != key:
+            return []
+        results: list[WindowResult] = []
+        for i, w in enumerate(manifest.get("windows", [])):
+            if not isinstance(w, dict) or w.get("index") != i:
+                break  # only a consecutive prefix is safe to replay
+            paths = {
+                name: out_dir / str(w[name])
+                for name in ("audio", "captions", "descriptions")
+                if w.get(name)
+            }
+            ext_name = w.get("extended_audio")
+            ext_path = (out_dir / str(ext_name)) if ext_name else None
+            required = list(paths.values()) + ([ext_path] if ext_path else [])
+            if len(paths) < 3 or not all(p.exists() for p in required):
+                break
+            results.append(
+                WindowResult(
+                    index=i,
+                    t_start=float(w["t_start"]),
+                    t_end=float(w["t_end"]),
+                    audio_path=paths["audio"],
+                    captions_path=paths["captions"],
+                    descriptions_path=paths["descriptions"],
+                    extended_audio_path=ext_path,
+                    rung_counts={int(k): int(v) for k, v in dict(w["rung_counts"]).items()},
+                )
+            )
+        return results
 
     def _source(self) -> _WindowSource:
         # Real preprocessing slices the video (first window fast); mock partitions.
@@ -135,7 +185,8 @@ class ChunkedStreamingOrchestrator:
                 continue
             decision = active_vl.describe(m, rules)
             if decision.emit and decision.ad_text:
-                emits.append((m, rungs.cap_ad_words(decision.ad_text, cfg.vl.max_ad_words)))
+                cap = cfg.vl.effective_max_ad_words
+                emits.append((m, rungs.cap_ad_words(decision.ad_text, cap)))
         if vl is None:
             del active_vl
             _free_mlx()
@@ -228,7 +279,7 @@ class ChunkedStreamingOrchestrator:
 # --------------------------------------------------------------------------- #
 class _WindowSource:
     def windows(
-        self, video: Path, window_s: float, progress: ProgressSink
+        self, video: Path, window_s: float, progress: ProgressSink, start_index: int = 0
     ) -> Iterator[StreamWindow]:
         raise NotImplementedError
 
@@ -240,13 +291,13 @@ class _PartitionSource(_WindowSource):
         self._config = config
 
     def windows(
-        self, video: Path, window_s: float, progress: ProgressSink
+        self, video: Path, window_s: float, progress: ProgressSink, start_index: int = 0
     ) -> Iterator[StreamWindow]:
         base, moments, segments = build_preprocessor(self._config).run(video, progress)
         sr = base.sample_rate
         total = base.duration
         n = max(1, math.ceil(total / window_s))
-        for w in range(n):
+        for w in range(start_index, n):
             t0 = w * window_s
             t1 = min((w + 1) * window_s, total)
             clip = AudioClip(array("f", base.samples[int(t0 * sr): int(t1 * sr)]), sr)
@@ -262,14 +313,14 @@ class _SliceSource(_WindowSource):
         self._config = config
 
     def windows(
-        self, video: Path, window_s: float, progress: ProgressSink
+        self, video: Path, window_s: float, progress: ProgressSink, start_index: int = 0
     ) -> Iterator[StreamWindow]:
         duration = _probe_duration(video)
         # A sub-second tail must not spawn a degenerate (empty) trailing window.
         n = max(1, math.ceil((duration - 1.0) / window_s))
         pp = build_preprocessor(self._config)
         work = Path(tempfile.mkdtemp(prefix="ladpipe_stream_"))
-        for w in range(n):
+        for w in range(start_index, n):
             t0 = w * window_s
             if t0 >= duration:
                 break

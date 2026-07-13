@@ -61,7 +61,8 @@ class PrepareThenCacheOrchestrator:
                 continue
             decision = vl.describe(m, rules)
             if decision.emit and decision.ad_text:
-                emits.append((m, rungs.cap_ad_words(decision.ad_text, cfg.vl.max_ad_words)))
+                cap = cfg.vl.effective_max_ad_words
+                emits.append((m, rungs.cap_ad_words(decision.ad_text, cap)))
             else:
                 suppressed.append(m.id)
         del vl  # free vision before loading TTS (§6.2)

@@ -17,10 +17,14 @@ struct StreamingPlayerView: View {
                                 settings: settings)
                 if player.isBuffering {
                     Text("Preparing next part…")
-                        .padding(10).background(.black.opacity(0.7))
+                        .padding(10).background(.black.opacity(0.8))
                         .foregroundStyle(.white).clipShape(Capsule())
                         .accessibilityLabel("Preparing the next part of the lecture")
                 }
+                if player.ad.pendingCue != nil {
+                    DescriptionAvailableBadge()
+                }
+                PlayerShortcutLayer()
             }
             TransportControls(
                 isPlaying: player.isPlaying, isMuted: player.isMuted,

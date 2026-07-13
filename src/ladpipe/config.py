@@ -15,7 +15,7 @@ PREPROCESS_BACKENDS = {"mock", "local"}
 VL_BACKENDS = {"mock", "mlxvlm"}  # one mlx-vlm backend loads either trained model (§6)
 TTS_BACKENDS = {"mock", "voxtral"}
 OCR_MODES = {"auto", "on", "off"}
-VL_VERBOSITY = {"minimal", "balanced", "expansive"}  # AD level of detail (MAVP-style)
+VERBOSITY_LEVELS = {"brief", "standard", "detailed"}
 WHISPER_BACKENDS = {"mlx", "openai"}  # mlx = GPU-resident on Apple Silicon (much faster)
 
 
@@ -70,11 +70,21 @@ class VLConfig:
     # Cap AD-line length before TTS (0 = no cap). A safety net against verbose base-model
     # output and a stand-in for the fine-tune's concise AD; shorter lines = faster TTS.
     max_ad_words: int = 0
-    # AD level of detail (MAVP-style minimal | balanced | expansive): adjusts the VL
-    # prompt's style line. One variant per prepare run; the cache is keyed by it.
-    verbosity: str = "balanced"
+    # AD detail level (§8): parameterises the VL prompt style and scales the word cap.
+    # Part of the cache key (config_hash includes vl), so each level caches separately.
+    verbosity: str = "standard"
     model_large: str = ""  # optional richer model used on >= model_large_min_ram_gb
     model_large_min_ram_gb: int = 16
+
+    @property
+    def effective_max_ad_words(self) -> int:
+        """Word cap after applying the verbosity level (0 = no cap, as before)."""
+        base = self.max_ad_words or 14  # sensible cap when the config leaves it uncapped
+        if self.verbosity == "brief":
+            return min(base, 10)
+        if self.verbosity == "detailed":
+            return 0 if self.max_ad_words == 0 else self.max_ad_words * 2
+        return self.max_ad_words
 
 
 @dataclass(frozen=True)
@@ -217,7 +227,7 @@ def load_config(path: Path) -> Config:
         model=effective_model,
         image_max_side=int(v_raw.get("image_max_side", 768)),
         max_ad_words=int(v_raw.get("max_ad_words", 0)),
-        verbosity=str(v_raw.get("verbosity", "balanced")),
+        verbosity=str(v_raw.get("verbosity", "standard")),
         model_large=model_large,
         model_large_min_ram_gb=min_ram,
     )
@@ -225,7 +235,7 @@ def load_config(path: Path) -> Config:
         raise ConfigError("vl.image_max_side must be positive")
     if vl.max_ad_words < 0:
         raise ConfigError("vl.max_ad_words must be >= 0 (0 = no cap)")
-    _check_choice(vl.verbosity, VL_VERBOSITY, "vl.verbosity")
+    _check_choice(vl.verbosity, VERBOSITY_LEVELS, "vl.verbosity")
 
     pp_raw = raw.get("preprocess", {})
     preprocess = PreprocessConfig(
