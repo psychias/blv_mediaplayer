@@ -8,6 +8,10 @@ heavy work runs once per lecture (**prepare-then-cache**); every later open is i
 > **Status: Phase 1 complete** — the Python core (`ladpipe`) runs end-to-end on mock backends.
 > Real on-device models (Phase 2), the SwiftUI app (Phase 3) and the `.dmg` (Phase 4) follow.
 
+> **This version's accessibility work** (keyboard-only operation, AD timing/verbosity control,
+> WCAG 2.1 AA) and the standards/models/tools behind it are documented in
+> [`ACCESSIBILITY.md`](ACCESSIBILITY.md).
+
 ## What works today (Phase 1)
 
 The full pipeline — preprocess → redundancy pre-filter → VL decision → TTS → rung-ladder placement
