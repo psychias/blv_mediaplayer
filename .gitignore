@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Bundled models are fetched at build time, never committed (§9.1)
+models/
+app/**/Resources/models/
+
+# Build artifacts
+build/
+dist/
+*.dmg
+app/build/
+
+# Local cache / generated artifacts
+*.wav
+*.vtt

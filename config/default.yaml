@@ -1,0 +1,71 @@
+# Default configuration for the ladpipe lecture audio-description pipeline.
+# Backend selection is config-only (§2.4): swapping mock <-> real, or the base VL
+# model for the fine-tuned one, is a change here, never in code.
+
+pipeline_version: "0.1.1"
+
+backends:
+  preprocess: mock   # mock | local
+  vl: mock           # mock | mlxvlm
+  tts: mock          # mock | voxtral
+
+# Slide-AD rules passed to the VL backend's describe(). Mock ignores it.
+rules_file: /Users/steliospsychias/Desktop/bvl_mediaplayer/rules_for_slides.yaml
+
+prefilter:
+  # Suppress a moment WITHOUT a VL call only when OCR/transcript cosine >= this
+  # AND the moment has no visual signal. Tuned toward "send to VL" (§7).
+  redundancy_threshold: 0.8
+
+rungs:
+  max_compress_factor: 1.3   # rung 2 max speed-up
+  time_shift_cap_s: 5.0      # rung 3 hard cap (§7)
+  placeholder_marker_s: 0.4  # rung 4 non-verbal marker length
+  merge_gap_s: 3.0           # fuse AD lines whose moments sit <= this apart (0 = never)
+
+tts:
+  voice: neutral_female
+  sample_rate: 24000
+  # Real Voxtral backend (Phase 2) reads these; mock ignores them.
+  voxtral:
+    model_path: ""
+
+vl:
+  # 4-bit MLX VL weights (mlx-vlm auto-detects the architecture). Vision stays
+  # GPU-resident. Qwen3-VL-2B is the verified 8 GB default: same family as the
+  # fine-tune target (§6.1), fits 8 GB, good quality, ~4 s/call. (The spec's
+  # gemma-4-e2b-it-4bit does NOT load on current mlx-vlm — arch mismatch; and the
+  # Gemma "E2B"/4B builds OOM/time out on 8 GB. Use them only via model_large on 16 GB+.)
+  # Point `model` at converted fine-tuned MLX weights to swap — a pure config change.
+  model: mlx-community/Qwen3-VL-2B-Instruct-4bit
+  image_max_side: 768
+  max_ad_words: 0    # 0 = no cap; set e.g. 14 to bound verbose AD (faster TTS, §7)
+  verbosity: balanced  # AD level of detail: minimal | balanced | expansive
+  model_large: ""               # optional richer model used on >= model_large_min_ram_gb
+  model_large_min_ram_gb: 16
+
+preprocess:
+  # Real backend (local) only; mock ignores these. All feed the cache key.
+  whisper_backend: mlx            # mlx (GPU, Apple Silicon, ~10x faster) | openai (CPU fallback)
+  whisper_model: mlx-community/whisper-large-v3-turbo  # for openai, use "turbo" instead
+  scene_threshold: 0.3            # ffmpeg scene-change sensitivity (0-1)
+  keyframe_dedup_max_distance: 5  # perceptual-hash hamming distance to drop duplicate slides
+  transcript_pad_s: 2.0           # seconds of transcript context around each moment
+  ocr: auto                       # auto | on | off — feed slide OCR to the VL prompt (§6)
+
+extended_ad:
+  # Rung 0: briefly pause the video to voice a high-value description that fits no
+  # gap (§7). On = recommended (the gap-fit analysis showed gap-only drops most real
+  # AD); off = gap-only comparison mode (high-value non-fitting falls to marker/drop).
+  enabled: true
+  # When true, EVERY AD pauses the video and plays the full description (no attempt to
+  # squeeze it into the lecturer's pauses). Cleaner audio; the video pauses more often.
+  always_pause: false
+
+cache:
+  dir: ~/Library/Application Support/LectureAD/cache
+
+player:
+  # Captions are ON by default (overrides §8's audio-only default); the Phase 3
+  # UI reads this to decide whether caption tracks start visible.
+  captions_default_on: true

@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ladpipe"
+version = "0.1.0"
+description = "Offline lecture audio-description pipeline for blind and low-vision students."
+requires-python = ">=3.11"
+readme = "README.md"
+# Core runtime deps are deliberately tiny: the mock path (and the whole
+# orchestration core) must import and run with NO heavy/GPU/network deps.
+# PyYAML is the only core dep — config files and the slide-AD rules are YAML.
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Heavy, real-backend-only deps. NEVER imported at module top level — each is
+# lazy-imported inside its concrete backend class (Phase 2). CI installs none of these.
+real = [
+    "mlx-whisper>=0.4",  # transcription on the GPU (Apple Silicon) — the first-open speed-up
+    "openai-whisper>=20240930",  # CPU fallback whisper backend
+    "mlx-vlm>=0.1.30",  # VL via MLX (GPU-resident vision); pin past Gemma-4 PLE-quant fix (§6)
+    "mlx-audio>=0.2.0",
+    "mistral-common[audio]>=1.5",  # Voxtral tekken tokenizer (required by mlx-audio Voxtral)
+    "silero-vad>=5.1",
+    # Keep torch and torchaudio on the SAME minor line — a mismatch (e.g. torch 2.12 vs
+    # torchaudio 2.11) triggers a torch "circular import / no attribute tensor" failure.
+    "torch>=2.11,<2.12",
+    "torchaudio>=2.11,<2.12",
+    "imagehash>=4.3",
+    "pillow>=10.0",
+    "pyobjc-framework-Vision>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+]
+# Build-time only: fetch + bundle models (§9.1). Not shipped, not in the app target.
+build = [
+    "huggingface_hub>=0.24",
+]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+ladpipe = "ladpipe.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ladpipe"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+# Heavy real-backend deps are optional and not installed in CI; ignore their stubs.
+[[tool.mypy.overrides]]
+module = [
+    "whisper.*", "mlx_whisper.*", "mlx_vlm.*", "mlx_audio.*", "silero_vad.*", "imagehash.*",
+    "PIL.*", "Vision.*", "Quartz.*", "Foundation.*", "huggingface_hub.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]
