@@ -1,176 +1,185 @@
-# Accessibility Overhaul — what this version adds
+# Accessibility
 
-This version makes LectureAD **fully operable without a mouse**, gives the listener
-**control over when and how much** audio description (AD) is spoken, and brings the
-whole UI to **WCAG 2.1 AA**. It was merged with this copy's newer features (streaming,
-`smoothPlayback`, find-in-lecture search).
+LectureAD is built for blind and low-vision students, so the app is fully operable without a
+mouse, the listener controls when and how much description is spoken, and the interface meets
+WCAG 2.1 Level AA.
 
-- Port commit: `e49cbc7`
-- Follow-up crash fix: `d99d48f` (see [Reliability](#reliability) below)
-
-Verified end-to-end under the mock pipeline via an automated GUI walkthrough (keyboard
-driving + screenshots): 94 pytest tests, strict mypy, ruff, contrast audit 11/11 AA, and
-the app builds and runs the streaming flow.
-
----
+This document covers how to drive the app, what each accessibility feature does, and the
+standards and research behind those choices.
 
 ## How you control the app
 
-The app can be driven four ways, and every action is reachable by more than one — so it
-works with a mouse, with the keyboard alone, or with VoiceOver.
+There are four ways to drive the app, and every action is reachable by more than one. It works
+with a mouse, with the keyboard alone, or with VoiceOver.
 
-**Getting started.** On the launch screen, pick a preparation mode — **Start sooner**
-(streaming: playback begins after the first window while the rest prepares) or **Smoothest
-playback** (batch: the whole lecture prepares first) — then **Open Lecture** (or `⌘O`) and
-choose a video. You then land in the player.
+**Getting started.** On the launch screen, choose a preparation mode. "Start sooner" begins
+playback after the first window while the rest prepares. "Smoothest playback" prepares the whole
+lecture first. Then choose Open Lecture, or press Cmd-O, and pick a video.
 
-**On-screen controls.** The transport bar (Open · Find · Back 15 · Play/Pause · Forward 15 ·
-Mute · scrubber) and, below it, the caption row (Lecturer captions · AD captions · font size
-A/A · High contrast · Caption position · video zoom).
+**On-screen controls.** The transport bar carries Open, Find, Back 15, Play/Pause, Forward 15,
+Mute and the scrubber. The caption row below it carries lecturer captions, description captions,
+font size, high contrast, caption position and video zoom.
 
-**Menu bar / hardware.** All actions live in the **Playback**, **Audio Description**, **View**
-and **Help** menus. The hardware play/pause media key also controls the player, and every
-control has a VoiceOver label.
+**Menu bar and hardware.** Every action also lives in the Playback, Audio Description, View and
+Help menus. The hardware play/pause key controls the player, and every control has a VoiceOver
+label.
 
-**Keyboard shortcuts.** Two layers — fast **single keys** while the player is on screen (can
-be turned off for WCAG 2.1.4), and **menu-bar shortcuts** that always work even with single
-keys off. Press `⌘/` in the app for this list.
+**Keyboard shortcuts.** There are two layers. Single keys are fast and work while the player is on
+screen. Menu-bar shortcuts always work, including when single keys are switched off. Press Cmd-/
+in the app for the same list.
 
 | Action | Single key | Menu shortcut |
 | --- | --- | --- |
-| Play / pause | `Space` or `K` | `⌥⌘P` |
-| Back / forward 15 s | `J` / `L` | `⌥⌘J` / `⌥⌘L` |
-| Back / forward 5 s | `←` / `→` | `⌥⌘←` / `⌥⌘→` |
-| Mute / unmute | `M` | `⌥⌘U` |
-| Open another lecture | — | `⌘O` |
+| Play or pause | `Space` or `K` | `⌥⌘P` |
+| Back or forward 15 s | `J` / `L` | `⌥⌘J` / `⌥⌘L` |
+| Back or forward 5 s | `←` / `→` | `⌥⌘←` / `⌥⌘→` |
+| Mute or unmute | `M` | `⌥⌘U` |
+| Open another lecture | none | `⌘O` |
 | Play the offered description now | `D` | `⇧⌘D` |
 | Skip the description being spoken | `X` | `⌥⌘X` |
 | Replay the last description | `R` | `⌥⌘R` |
-| AD timing: Automatic / On-Demand / Off | — | `⌥⌘1` / `⌥⌘2` / `⌥⌘3` |
-| AD detail: Brief / Standard / Detailed | — | `⌥⌘7` / `⌥⌘8` / `⌥⌘9` |
-| Lecturer captions on/off | `C` | `⌥⌘C` |
-| AD captions on/off | `A` | `⌥⌘A` |
-| High-contrast captions on/off | `H` | `⌃⌘H` |
-| Larger / smaller captions | — | `⌘=` / `⌘-` |
-| Zoom video in / out | — | `⇧⌘=` / `⇧⌘-` |
-| Turn single-key shortcuts on/off | — | Playback menu |
-| Show this shortcut list | `?` | `⌘/` |
-| Close a sheet / menu | `Esc` | — |
+| Description timing: automatic, on demand, off | none | `⌥⌘1` / `⌥⌘2` / `⌥⌘3` |
+| Description detail: brief, standard, detailed | none | `⌥⌘7` / `⌥⌘8` / `⌥⌘9` |
+| Lecturer captions on or off | `C` | `⌥⌘C` |
+| Description captions on or off | `A` | `⌥⌘A` |
+| High-contrast captions on or off | `H` | `⌃⌘H` |
+| Larger or smaller captions | none | `⌘=` / `⌘-` |
+| Zoom video in or out | none | `⇧⌘=` / `⇧⌘-` |
+| Turn single-key shortcuts on or off | none | Playback menu |
+| Show the shortcut list | `?` | `⌘/` |
+| Close a sheet or menu | `Esc` | none |
 
-Two AD-specific behaviours: in **On-Demand** timing a "Description available — press D" badge
-appears and you choose when to hear each description; and the **detail level** can be changed
-mid-playback, which re-prepares and resumes where you were.
+## Keyboard-only operation
 
----
+Every function is reachable from the keyboard, and the menu bar is the single source of truth for
+what exists. This satisfies WCAG 2.1.1 Keyboard.
 
-## Improvements in this version
+- **Playback menu**: play and pause, back and forward 15 seconds, back and forward 5 seconds, mute.
+- **Audio Description menu**: timing mode, play, skip and replay a description, detail level.
+- **View menu**: caption toggles, caption size and position, video zoom.
+- **Help menu**: the full shortcut sheet at Cmd-/.
 
-### Keyboard-only operation (WCAG 2.1.1 / 2.1.4)
+Single-key shortcuts sit behind a toggle, which satisfies WCAG 2.1.4 Character Key Shortcuts. A
+screen reader in browse mode consumes plain keys before the page receives them, so a user who needs
+that can switch the single keys off and still reach everything through the Option-Cmd shortcuts.
 
-Everything is reachable from the keyboard, and every action lives in the **menu bar** as
-the single source of truth (`AppCommands.swift`):
+Focus starts somewhere sensible, on Play/Pause in the player and on the Open button at launch, and
+Tab moves through the controls with a visible focus ring.
 
-- **Playback** menu — Play/Pause, Back/Forward 15 s, Back/Forward 5 s, Mute (all `⌥⌘`).
-- **Audio Description** menu — timing mode, Play/Skip/Replay description, detail level.
-- **View** menu — caption toggles, caption size/position, video zoom.
-- **Help → Keyboard Shortcuts (`⌘/`)** — a full, searchable shortcut sheet
-  (`KeyboardHelpView.swift`).
-- **Single-key player shortcuts** (`Space` `K` `J` `L` `M` `D` `X` `R` `C` `A` `H` `?`,
-  bare `←/→` = ±5 s) via `PlayerShortcutLayer`, behind a **WCAG 2.1.4 "Single-Key Shortcuts"
-  toggle** so they can be turned off — the menu-bar `⌥⌘` shortcuts always work.
-- Sensible initial focus (`defaultFocus` on Play/Pause and the Open button) and Tab
-  traversal with a visible focus ring.
+## Controlling when descriptions are spoken
 
-### AD timing control
+A shared scheduler decides when description is spoken, in three modes.
 
-A shared `ADScheduler` decides when AD is spoken, in three modes:
+- **Automatic.** The video pauses, the description plays, then playback resumes.
+- **On demand.** A badge reads "Description available, press D". The listener chooses when to hear
+  it, skips it with X, or replays the last one with R.
+- **Off.** No spoken description.
 
-- **Automatic** — pause the video and describe (extended AD, "rung 0").
-- **On-Demand** — a **"Description available — press D"** badge appears; the listener
-  chooses when to hear it (`D`), skip (`X`), or replay the last one (`R`).
-- **Off** — no spoken description.
+Seeking re-arms the cues, so rewinding replays the description. The batch and streaming players
+share one scheduler, so the behaviour is identical in both.
 
-Seeking re-arms cues (rewinding replays the AD), and both the batch and streaming players
-share the one scheduler.
+Descriptions do not begin on the exact frame a slide appears. The pause waits a short settle
+period, 1.2 seconds by default, so the viewer registers the new slide and hears the lecturer's own
+reference to it, such as "in this diagram", before the video freezes. Pausing on the first frame
+gave the slide no screen time and cut the lecturer off mid-sentence.
 
-### AD verbosity control (brief / standard / detailed)
+A short non-speech tone plays before each pause, so a listener can tell that the system paused
+deliberately rather than the video stalling. The description track is bookended, opening with
+"Audio description begins" and closing with "That was the final description", and descriptions less
+than three seconds apart are merged into one line so they do not arrive as fragments.
 
-The listener picks how much detail each description carries:
+## Controlling how much detail
 
-- Scales the per-line word cap (`effective_max_ad_words`), so *brief* is one short sentence
-  and *detailed* allows a few. (The fine-tuned model is prompted in its fixed training
-  format, so the level no longer alters the prompt itself.)
-- Exposed as a `--verbosity` CLI flag, a `vl.verbosity` config field (part of the cache key,
-  so each level caches separately), and an in-app menu (`⌥⌘7/8/9`).
-- **Switchable mid-session**: changing the level re-prepares via the sidecar while keeping
-  the player on screen and **resumes at the playhead** (streaming) or from cache (batch).
+The listener chooses brief, standard or detailed.
 
-### Streaming resume-from-manifest
+The level scales the word cap for each line, so brief is one short sentence and detailed allows a
+few. It is available as the `--verbosity` flag, as `vl.verbosity` in config, and in the Audio
+Description menu. Because the level is part of the cache key, each level caches separately.
 
-On a sidecar restart (e.g. a verbosity switch), already-prepared windows **replay instantly**
-from the cached manifest with no re-inference and no pacer stalls, so the switch is seamless.
+The level can be changed during playback. The pipeline re-prepares through the sidecar while the
+player stays on screen, then resumes at the playhead in streaming mode or from cache in batch mode.
+Already-prepared windows replay from the cached manifest without re-running the models, so the
+switch does not stall.
 
-### Find-in-lecture search (`⌘F`)
+## Describing pointing gestures
 
-Content-based navigation instead of time-scrubbing — search lecturer captions and AD text
-and jump to the moment, reflecting the finding that BLV users navigate by content.
+Descriptions cover more than slide changes. When the lecturer moves the cursor and rests it on part
+of a slide, that becomes a described moment of its own, for example "The cursor points to the peak
+of the curve".
 
-### WCAG 2.1 AA visual contrast
+This matters because slide-change detection cannot see a cursor. A moving pointer changes about one
+hundredth of what a slide change does, far below any sensible detection threshold, so without
+dedicated tracking these gestures are invisible to the pipeline and the listener loses every "as you
+can see here" the lecturer makes.
 
-- A dedicated AA palette in `Theme.swift` (secondary text `#595959`, solid bars, high-contrast
-  caption pills, `#FFFF00` AD-caption yellow).
-- A build-time gate, `scripts/contrast_audit.py`, checks **every colour literal** against the
-  required ratio (text 4.5:1, non-text 3.0:1) — currently **11/11 pass**.
-- Non-speech **earcon** cue before each system-initiated pause, plus AD-track **bookending**
-  and near-adjacent line **merging**, so listeners can tell where descriptions start and end.
+Detection is deliberately conservative. A recording with no visible cursor produces no gestures
+rather than invented ones, and the model still suppresses a gesture when the lecturer's words
+already identify what is being pointed at.
 
-### Reliability
+## Finding a moment in the lecture
 
-- **Fixed a streaming crash (`d99d48f`):** writing a pacing credit to a sidecar that had
-  already exited raised `SIGPIPE` and killed the app (opening any lecture in streaming mode
-  crashed instantly under mock; real runs hit it once the sidecar finished). Now `SIGPIPE`
-  is ignored process-wide so those writes fail harmlessly, as the code already intended.
+Cmd-F searches the lecturer transcript and the description text, and selecting a result jumps there.
+This is content-based navigation rather than scrubbing through time, following the finding that
+blind and low-vision users navigate recordings by content.
 
----
+## Visual contrast
 
-## Resources used
+The interface meets WCAG 2.1 AA contrast for both text and controls.
 
-### Accessibility standards & AD research
+- A dedicated palette in `Theme.swift`, with secondary text at `#595959`, opaque bars rather than
+  translucent material, high-contrast caption pills and `#FFFF00` for description captions.
+- A build-time gate, `scripts/contrast_audit.py`, checks every colour literal against the required
+  ratio, 4.5:1 for text and 3:1 for non-text. All 11 pairs currently pass.
 
-- **WCAG 2.1 Level AA** — the target conformance level. Specific criteria applied:
-  - **2.1.1 Keyboard** — all functionality operable from the keyboard.
-  - **2.1.4 Character Key Shortcuts** — single-key shortcuts are toggleable.
-  - **1.4.11 Non-text Contrast** — control/icon contrast ≥ 3:1.
-  - **1.2.5 Audio Description (Prerecorded)** — the redundancy gate (describe only what
-    speech leaves uncovered).
-- **eCH-0059** — the Swiss accessibility standard used as the contrast audit's reference.
-- **MAVP study** (BLV lecture-AD research) — informed several design choices: navigate by
-  content (search), non-speech cues for system-initiated pauses (earcon), merge descriptions
-  ≤ 3 s apart, and bookend the description track.
-- **DCMP Description Key** and **Mayer (2009) redundancy principle** — secondary sources for
-  the redundancy gate.
-- Operative in-repo standard: **`rules_for_slides.yaml`** / **`lecture_ad_standards_for_slides.md`**
-  (what to describe, per slide-element type).
+## Reliability
 
-### On-device models (fully offline, Apple Silicon)
+System-initiated pauses must never take the app down with them. One such fault has been fixed:
+writing a pacing credit to a sidecar that had already exited raised `SIGPIPE` and killed the app,
+which under mock meant any lecture opened in streaming mode crashed immediately. `SIGPIPE` is now
+ignored process-wide, so those writes fail harmlessly as the surrounding code already assumed.
 
-- **Vision-language (AD generation):** a 4-bit MLX VL model via **mlx-vlm** — Qwen3-VL-2B with
-  the **AD4Edu** audio-description LoRA merged in (Apache-2.0); config-swappable (`vl.model`).
-- **Text-to-speech:** **Kokoro-82M** (`af_heart` voice) via **mlx-audio** (Apache-2.0); English
-  G2P by **misaki** with a pip-bundled espeak-ng fallback for technical vocabulary.
-- **Speech-to-text:** **Whisper-large-v3-turbo** via **mlx-whisper** (GPU), with
-  **openai-whisper** as the CPU fallback.
-- **Voice activity detection:** **Silero VAD** (finds the pauses AD is placed into).
-- **OCR:** macOS-native **Apple Vision** — the fine-tune sees the keyframe plus this OCR text,
-  as in training, so OCR is on unless `preprocess.ocr: off`.
+## Standards and research behind these choices
 
-### Tooling
+**WCAG 2.1 Level AA** is the target. The criteria that shaped specific decisions:
 
-- **SwiftUI** app built **without Xcode** (Command Line Tools `swiftc` + macOS SDK) via
-  `app/build_app.sh`.
-- **Python core** (`ladpipe`) driven as a JSON-over-stdio sidecar; **ffmpeg** for media.
-- **MLX** runtime stack (`mlx-vlm`, `mlx-audio`, `mlx-whisper`).
-- Dev/CI gates: **pytest**, **ruff**, **mypy --strict**, and the custom
-  **`scripts/contrast_audit.py`** WCAG gate.
-- GUI walkthrough verification via macOS `screencapture` + `osascript` (System Events)
-  automation.
+- **2.1.1 Keyboard**: all functionality operable from the keyboard.
+- **2.1.4 Character Key Shortcuts**: single-key shortcuts can be switched off.
+- **1.4.11 Non-text Contrast**: controls and icons at 3:1 or better.
+- **1.2.5 Audio Description (Prerecorded)**: describe only what the speech leaves uncovered.
+
+**eCH-0059**, the Swiss accessibility standard, is the reference the contrast audit checks against.
+
+The **MAVP study** on lecture audio description for blind and low-vision users informed four
+choices: navigate by content rather than time, use a non-speech cue before a system-initiated pause,
+merge descriptions less than three seconds apart, and bookend the description track.
+
+The **DCMP Description Key** and **Mayer's redundancy principle** are secondary sources for the rule
+that description should not repeat what the lecturer already says.
+
+The operative in-repo standard is `rules_for_slides.yaml` and
+`lecture_ad_standards_for_slides.md`, which set out what to describe for each kind of slide element.
+
+## Models and tooling
+
+All models run on the machine. Nothing is sent anywhere.
+
+- **Description**: Qwen3-VL-2B with the AD4Edu audio-description adapter merged in, quantised to
+  8-bit MLX and run through mlx-vlm. Apache 2.0, and swappable through `vl.model`.
+- **Speech**: Kokoro-82M with the `af_heart` voice through mlx-audio. Apache 2.0. English
+  pronunciation comes from misaki, with a bundled espeak-ng fallback for technical vocabulary.
+- **Transcription**: Whisper large-v3-turbo through mlx-whisper on the GPU, with openai-whisper as a
+  CPU fallback.
+- **Silence detection**: Silero VAD, which finds the pauses description is placed into.
+- **Slide text**: Apple Vision OCR, built into macOS. The description model was trained with this
+  text alongside the keyframe, so it stays on unless `preprocess.ocr` is set to off.
+
+The app is SwiftUI, built without Xcode using the Command Line Tools compiler and the macOS SDK. It
+drives the Python pipeline as a sidecar over newline-delimited JSON, and uses ffmpeg for media.
+
+## Verification
+
+The current state is checked by 123 tests, strict type checking with mypy, linting with ruff, and
+the contrast gate at 11 of 11 pairs passing. The app builds and runs the streaming flow.
+
+Screen-reader speech, playback behaviour and screen-off operation are verified by hand on a Mac with
+a display session, since they cannot be asserted in an automated test.
