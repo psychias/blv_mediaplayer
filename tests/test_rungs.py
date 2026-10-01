@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
+
 from ladpipe.config import RungConfig
-from ladpipe.rungs import bookend, cap_ad_words, merge_adjacent, place
+from ladpipe.rungs import bookend, cap_ad_words, merge_adjacent, place, pointing_cue
 from ladpipe.types import Moment
 
 
@@ -82,25 +84,39 @@ def test_cap_ad_words() -> None:
 
 
 def test_merge_adjacent_fuses_lines_within_gap() -> None:
-    a = _moment(id="a", t_start=0.0, t_end=10.0, visual_signal=True)
-    b = _moment(id="b", t_start=12.0, t_end=15.0, pause_after=2.0)  # 2s after a -> merge
+    a = _moment(id="a", t_start=10.0, t_end=12.0, visual_signal=True)
+    b = _moment(id="b", t_start=12.0, t_end=15.0, pause_after=2.0)  # slide flips 2s later
     merged = merge_adjacent([(a, "First line."), (b, "Second line.")], gap_s=3.0)
     assert len(merged) == 1
     m, text = merged[0]
     assert text == "First line. Second line."
     assert m.id == "a+b"
-    assert m.t_start == 0.0 and m.t_end == 15.0  # spans both moments
+    assert m.t_start == 10.0 and m.t_end == 15.0  # spans both moments
     assert m.pause_after == 2.0  # later moment's gap fields (where the line lands)
     assert m.visual_signal  # high value if EITHER was
 
 
 def test_merge_adjacent_chains_and_respects_gap() -> None:
-    a = _moment(id="a", t_start=0.0, t_end=10.0)
-    b = _moment(id="b", t_start=12.0, t_end=14.0)   # merges with a
-    c = _moment(id="c", t_start=15.0, t_end=17.0)   # merges into a+b (1s after b)
-    d = _moment(id="d", t_start=25.0, t_end=27.0)   # 8s gap -> stays separate
+    a = _moment(id="a", t_start=10.0, t_end=11.5)
+    b = _moment(id="b", t_start=11.5, t_end=13.0)   # 1.5s after a -> merges
+    c = _moment(id="c", t_start=13.0, t_end=20.0)   # 1.5s after b -> merges into a+b
+    d = _moment(id="d", t_start=25.0, t_end=27.0)   # 12s after c -> stays separate
     merged = merge_adjacent([(a, "x."), (b, "y."), (c, "z."), (d, "w.")], gap_s=3.0)
     assert [m.id for m, _ in merged] == ["a+b+c", "d"]
+    assert merged[0][0].t_start == 10.0
+
+
+def test_merge_adjacent_does_not_chain_continuous_speech() -> None:
+    # Real lectures: t_end is clamped to the next scene time whenever the lecturer talks
+    # across the slide change, so end-to-start gaps are 0 for every pair. Slides 20 s
+    # apart must still be separate lines (regression: a whole lecture fused at t=0).
+    emits = [
+        (_moment(id=f"m{i}", t_start=20.0 * i, t_end=20.0 * (i + 1)), f"line {i}.")
+        for i in range(10)
+    ]
+    merged = merge_adjacent(emits, gap_s=3.0)
+    assert len(merged) == 10
+    assert [m.t_start for m, _ in merged] == [20.0 * i for i in range(10)]
 
 
 def test_merge_adjacent_disabled_at_zero() -> None:
@@ -154,3 +170,44 @@ def test_extended_disabled_high_value_falls_to_marker(rung_cfg: RungConfig) -> N
     p = place(_moment(pause_after=0.5, visual_signal=True), 1.8, rung_cfg, "x",
               extended_ad_enabled=False)
     assert p.rung == 4
+
+
+def test_extended_start_settles_after_the_slide_change(rung_cfg: RungConfig) -> None:
+    # The pause must not land on the frame the slide appears: give the viewer a beat to see
+    # it, and the lecturer a beat to say "in this myogram...", before the video freezes.
+    m = _moment(t_start=100.0, t_end=160.0, pause_after=10.0, visual_signal=True)
+    p = place(m, 1.8, rung_cfg, "x", always_pause=True)
+    assert p.rung == 0 and p.start_time == 100.0 + rung_cfg.extended_settle_s
+
+
+def test_extended_start_settles_on_the_high_value_rung0_branch(rung_cfg: RungConfig) -> None:
+    # Same anchor when rung 0 is reached because the line fits no gap, not via always_pause.
+    m = _moment(t_start=100.0, t_end=160.0, pause_after=0.0, visual_signal=True)
+    p = place(m, 9.0, rung_cfg, "x")
+    assert p.rung == 0 and p.start_time == 100.0 + rung_cfg.extended_settle_s
+
+
+def test_extended_settle_never_outlasts_the_slides_speech(rung_cfg: RungConfig) -> None:
+    # Speech stops 0.4 s in (t_end is already clamped to the next slide change), so the
+    # settle stops there too rather than running on into the following slide.
+    m = _moment(t_start=100.0, t_end=100.4, pause_after=10.0, visual_signal=True)
+    p = place(m, 1.8, rung_cfg, "x", always_pause=True)
+    assert p.start_time == 100.4
+
+
+def test_extended_settle_zero_pauses_on_the_slide_change(rung_cfg: RungConfig) -> None:
+    cfg = dataclasses.replace(rung_cfg, extended_settle_s=0.0)
+    m = _moment(t_start=100.0, t_end=160.0, pause_after=10.0, visual_signal=True)
+    assert place(m, 1.8, cfg, "x", always_pause=True).start_time == 100.0
+
+
+def test_pointing_cue_leads_with_the_gesture_when_the_model_did_not() -> None:
+    assert pointing_cue("The plateau on the graph.") == (
+        "The lecturer points here. The plateau on the graph."
+    )
+    # Already says who points at what: leave it alone.
+    assert pointing_cue("The cursor points to the peak of the curve.") == (
+        "The cursor points to the peak of the curve."
+    )
+    assert pointing_cue("The lecturer traces the axis.") == "The lecturer traces the axis."
+

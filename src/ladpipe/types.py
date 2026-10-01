@@ -29,6 +29,9 @@ class Moment:
     next_boundary_offset: float = 0.0  # s from t_end to next sentence boundary
     next_boundary_pause: float = 0.0  # silence available at that boundary (s)
     visual_signal: bool = False  # cursor / scene-change / figure present (for the pre-filter)
+    # "slide": a slide change (the keyframe is the new slide). "pointing": the lecturer's
+    # cursor came to rest on the current slide (the keyframe carries a visible pointer there).
+    kind: str = "slide"
 
 
 @dataclass(frozen=True)

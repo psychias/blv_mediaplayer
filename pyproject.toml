@@ -26,8 +26,18 @@ real = [
     # silently suppress ALL audio description. This trio is the validated set.
     "mlx==0.31.2",
     "mlx-vlm==0.6.3",  # VL via MLX (GPU-resident vision)
-    "mlx-audio==0.4.4",
-    "mistral-common[audio]>=1.5",  # Voxtral tekken tokenizer (required by mlx-audio Voxtral)
+    # mlx-audio 0.5.4 fixes the Kokoro vocoder length mismatch (0.4.4 crashed on some
+    # sentences) and still runs on mlx 0.31.x; it pulls transformers>=5.14 (Qwen3-VL re-verified).
+    "mlx-audio==0.5.4",
+    # Kokoro English text processing: misaki dictionary G2P (+ spacy tokenizer; the
+    # en_core_web_sm model is fetched once by scripts/fetch_models.sh) with the
+    # pip-bundled espeak-ng as the out-of-dictionary fallback — no Homebrew needed.
+    "misaki>=0.7",
+    "num2words>=0.5",
+    "spacy>=3.8",
+    "phonemizer-fork>=3.3",
+    "espeakng-loader>=0.2",
+    "mistral-common[audio]>=1.5",  # legacy voxtral backend only (Voxtral tekken tokenizer)
     "silero-vad>=5.1",
     # Keep torch and torchaudio on the SAME minor line — a mismatch (e.g. torch 2.12 vs
     # torchaudio 2.11) triggers a torch "circular import / no attribute tensor" failure.
@@ -71,6 +81,7 @@ files = ["src", "tests"]
 module = [
     "whisper.*", "mlx_whisper.*", "mlx_vlm.*", "mlx_audio.*", "silero_vad.*", "imagehash.*",
     "PIL.*", "Vision.*", "Quartz.*", "Foundation.*", "huggingface_hub.*",
+    "misaki.*", "espeakng_loader.*", "phonemizer.*",
 ]
 ignore_missing_imports = true
 

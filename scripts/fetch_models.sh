@@ -5,11 +5,18 @@
 # Output layout (the app resolves model paths from here, then packaging copies it
 # into the .app bundle's Resources/models/ in Phase 4):
 #   models/
-#     gemma4-e2b-it-4bit/   4-bit MLX VL weights (mlx-vlm)
-#     voxtral/              mlx-community Voxtral-4B-TTS build
+#     ad4edu-qwen3vl-2b-mm-lora/  AD4Edu LoRA adapter, multimodal arm (private repo; see VL notes below)
+#     qwen3vl-2b-base/         Qwen3-VL-2B-Instruct bf16 base the adapter was trained on
+#     kokoro/               mlx-community Kokoro-82M build + the af_heart voice pack
 #     whisper/              whisper turbo weights
 #
 # Requires: pip install -e ".[build]"   (huggingface_hub)
+#
+# The VL adapter repo is PRIVATE: run `hf auth login` (or export HF_TOKEN) first. It is a
+# PEFT LoRA, so after fetching, merge + quantise once (needs the [real] extra + peft):
+#   .venv/bin/python scripts/merge_adapter.py --base models/qwen3vl-2b-base \
+#       --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 --out models/ad4edu-qwen3vl-2b-mm-8bit
+# and point vl.model at models/ad4edu-qwen3vl-2b-mm-8bit.
 #
 # REPRODUCIBILITY: pin exact commit hashes in the *_REV vars below. They default to
 # "main" with a warning — a real release build MUST pin them so every build matches
@@ -19,18 +26,21 @@ cd "$(dirname "$0")/.."
 
 MODELS_DIR="${MODELS_DIR:-models}"
 
-# 4-bit MLX VL model (NOT the -gguf / -w4a16-ct variants, which mlx-vlm won't load).
-VL_REPO="${VL_REPO:-mlx-community/gemma-4-e2b-it-4bit}"
+VL_REPO="${VL_REPO:-Psychias/ad4edu-qwen3vl-2b-sft}"   # multimodal arm: keyframe image + OCR
 VL_REV="${VL_REV:-main}"
-VL_DIR="${VL_DIR:-gemma4-e2b-it-4bit}"
+VL_DIR="${VL_DIR:-ad4edu-qwen3vl-2b-mm-lora}"
+# Base the adapter was trained on — pinned to the exact revision in the adapter's run_meta.json.
+VL_BASE_REPO="${VL_BASE_REPO:-Qwen/Qwen3-VL-2B-Instruct}"
+VL_BASE_REV="${VL_BASE_REV:-89644892e4d85e24eaac8bacfd4f463576704203}"
 
-VOXTRAL_REPO="mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"   # non-gated mirror, no token needed
-VOXTRAL_REV="${VOXTRAL_REV:-main}"
+KOKORO_REPO="${KOKORO_REPO:-mlx-community/Kokoro-82M-bf16}"
+KOKORO_REV="${KOKORO_REV:-main}"
+KOKORO_VOICE="${KOKORO_VOICE:-af_heart}"   # must match tts.voice in config
 
 WHISPER_REPO="${WHISPER_REPO:-openai/whisper-large-v3-turbo}"
 WHISPER_REV="${WHISPER_REV:-main}"
 
-for v in VL_REV VOXTRAL_REV WHISPER_REV; do
+for v in VL_REV KOKORO_REV WHISPER_REV; do
   if [ "${!v}" = "main" ]; then
     echo "WARNING: $v is 'main' (not pinned). Pin a commit hash for a reproducible release build." >&2
   fi
@@ -55,11 +65,22 @@ PY
 
 mkdir -p "$MODELS_DIR"
 fetch "$VL_REPO"      "$VL_REV"      "$VL_DIR"
-fetch "$VOXTRAL_REPO" "$VOXTRAL_REV" "voxtral"
+fetch "$VL_BASE_REPO" "$VL_BASE_REV" "qwen3vl-2b-base"
+fetch "$KOKORO_REPO"  "$KOKORO_REV"  "kokoro" "config.json" "kokoro-v1_0.safetensors" "voices/$KOKORO_VOICE.safetensors"
 fetch "$WHISPER_REPO" "$WHISPER_REV" "whisper"
+
+# Kokoro's English G2P (misaki) tokenises with spaCy's en_core_web_sm, which is not on
+# PyPI. Install it into the venv once here so first synthesis never hits the network.
+echo ">> spaCy en_core_web_sm (Kokoro/misaki tokenizer)"
+python - <<'PY'
+import spacy
+if not spacy.util.is_package("en_core_web_sm"):
+    spacy.cli.download("en_core_web_sm")
+print("   done: en_core_web_sm")
+PY
 
 echo
 echo "All models fetched into '$MODELS_DIR/'. Point config at them, e.g.:"
-echo "  vl.model:               $MODELS_DIR/$VL_DIR"
-echo "  tts.voxtral.model_path: $MODELS_DIR/voxtral"
+echo "  vl.model:               $MODELS_DIR/ad4edu-qwen3vl-2b-mm-8bit   (after scripts/merge_adapter.py, see header)"
+echo "  tts.kokoro.model_path:  $MODELS_DIR/kokoro    (tts.voice: $KOKORO_VOICE)"
 echo "  preprocess.whisper_model: turbo   (or a path under $MODELS_DIR/whisper)"

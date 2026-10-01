@@ -23,6 +23,6 @@
   <key>NSAppSleepDisabled</key>
   <true/>
   <key>NSHumanReadableCopyright</key>
-  <string>Bundled models: Voxtral-4B-TTS (CC-BY-NC-4.0); VL model (Apache-2.0); Whisper (MIT).</string>
+  <string>Bundled models: Kokoro-82M (Apache-2.0); VL model (Apache-2.0); Whisper (MIT).</string>
 </dict>
 </plist>

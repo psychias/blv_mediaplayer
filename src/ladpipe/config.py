@@ -13,7 +13,7 @@ import yaml
 
 PREPROCESS_BACKENDS = {"mock", "local"}
 VL_BACKENDS = {"mock", "mlxvlm"}  # one mlx-vlm backend loads either trained model (§6)
-TTS_BACKENDS = {"mock", "voxtral"}
+TTS_BACKENDS = {"mock", "kokoro", "voxtral"}
 OCR_MODES = {"auto", "on", "off"}
 VERBOSITY_LEVELS = {"brief", "standard", "detailed"}
 WHISPER_BACKENDS = {"mlx", "openai"}  # mlx = GPU-resident on Apple Silicon (much faster)
@@ -51,18 +51,23 @@ class RungConfig:
     # Merge emitted AD lines whose moments sit within this many seconds of each other
     # into one line (MAVP: merge descriptions <= 3 s apart). 0 = never merge.
     merge_gap_s: float = 3.0
+    # Wait this long after a slide change before a pause-and-describe (rung 0) line starts,
+    # so the viewer sees the new slide and hears the lecturer point at it before the video
+    # freezes. Clamped to the end of that slide's speech. 0 = pause on the change itself.
+    extended_settle_s: float = 1.2
 
 
 @dataclass(frozen=True)
 class TTSConfig:
     voice: str
     sample_rate: int
+    kokoro: dict[str, Any] = field(default_factory=dict)
     voxtral: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class VLConfig:
-    # Path/repo to 4-bit MLX VL weights (mlx-vlm auto-detects the architecture). The
+    # Path/repo to quantised MLX VL weights (mlx-vlm auto-detects the architecture). The
     # effective model after RAM auto-select is stored here (§6.1). Fine-tuned weights
     # drop in by pointing this at the converted MLX checkpoint — a pure config swap.
     model: str
@@ -95,6 +100,11 @@ class PreprocessConfig:
     keyframe_dedup_max_distance: int  # perceptual-hash hamming distance to dedup slides
     transcript_pad_s: float  # seconds of transcript context around a moment
     ocr: str  # auto | on | off — feed slide OCR into the VL prompt (§6)
+    # Cursor-dwell detection (preprocess/pointing.py): a deliberate move then a hold becomes
+    # a "pointing" moment. Scene detection cannot see the cursor at all.
+    pointing: bool = True
+    pointing_min_dwell_s: float = 0.8  # how long the cursor must hold still
+    pointing_min_gap_s: float = 10.0  # at most one pointing moment per this many seconds
 
 
 @dataclass(frozen=True)
@@ -137,9 +147,9 @@ class Config:
 
     @property
     def needs_ocr(self) -> bool:
-        # "auto" defers to the VL model; the shipped default reads slides itself, so
-        # auto resolves to off. "on"/"off" are explicit overrides (§6).
-        return self.preprocess.ocr == "on"
+        # "auto" defers to the VL model; the shipped AD4Edu fine-tune was trained with the
+        # OCR line alongside the keyframe, so auto resolves to ON. "off" is the explicit override.
+        return self.preprocess.ocr != "off"
 
     def config_hash(self) -> str:
         """Stable hash over tunables that affect the artifact (for the cache key)."""
@@ -167,12 +177,37 @@ def _require(d: dict[str, Any], key: str, where: str) -> Any:
     return d[key]
 
 
+def _resolved_backend(base: Path, raw: Any) -> dict[str, Any]:
+    """A TTS backend's settings, with its ``model_path`` resolved beside the config."""
+    out = dict(raw or {})
+    if "model_path" in out:
+        out["model_path"] = _beside_config(base, str(out["model_path"]))
+    return out
+
+
+def _beside_config(base: Path, value: str) -> str:
+    """Resolve a relative model/rules path against the config file's own directory.
+
+    The shipped .app carries its models next to its config inside the bundle, so the YAML
+    can name them relatively and still resolve wherever the app is installed. A value that
+    does not exist on disk when resolved (a Hugging Face repo id, say) is passed through
+    untouched, and an absolute path is left alone."""
+    if not value:
+        return value
+    p = Path(value).expanduser()
+    if p.is_absolute():
+        return str(p)
+    candidate = (base / p).resolve()
+    return str(candidate) if candidate.exists() else value
+
+
 def load_config(path: Path) -> Config:
     if not path.exists():
         raise ConfigError(f"config file not found: {path}")
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
         raise ConfigError(f"config must be a YAML mapping: {path}")
+    here = path.resolve().parent
 
     backends_raw = _require(raw, "backends", "config")
     backends = Backends(
@@ -185,7 +220,7 @@ def load_config(path: Path) -> Config:
     _check_choice(backends.tts, TTS_BACKENDS, "backends.tts")
 
     rules_raw = raw.get("rules_file")
-    rules_file = Path(str(rules_raw)).expanduser() if rules_raw else None
+    rules_file = Path(_beside_config(here, str(rules_raw))) if rules_raw else None
     if rules_file is not None and not rules_file.exists():
         raise ConfigError(f"rules_file does not exist: {rules_file}")
 
@@ -202,24 +237,27 @@ def load_config(path: Path) -> Config:
         time_shift_cap_s=float(_require(r_raw, "time_shift_cap_s", "rungs")),
         placeholder_marker_s=float(_require(r_raw, "placeholder_marker_s", "rungs")),
         merge_gap_s=float(r_raw.get("merge_gap_s", 3.0)),
+        extended_settle_s=float(r_raw.get("extended_settle_s", 1.2)),
     )
     if rungs.max_compress_factor < 1.0:
         raise ConfigError("rungs.max_compress_factor must be >= 1.0")
-    if rungs.time_shift_cap_s < 0.0 or rungs.placeholder_marker_s < 0.0 or rungs.merge_gap_s < 0.0:
+    if (rungs.time_shift_cap_s < 0.0 or rungs.placeholder_marker_s < 0.0
+            or rungs.merge_gap_s < 0.0 or rungs.extended_settle_s < 0.0):
         raise ConfigError("rung timings must be non-negative")
 
     t_raw = _require(raw, "tts", "config")
     tts = TTSConfig(
         voice=str(_require(t_raw, "voice", "tts")),
         sample_rate=int(_require(t_raw, "sample_rate", "tts")),
-        voxtral=dict(t_raw.get("voxtral", {})),
+        kokoro=_resolved_backend(here, t_raw.get("kokoro", {})),
+        voxtral=_resolved_backend(here, t_raw.get("voxtral", {})),
     )
     if tts.sample_rate <= 0:
         raise ConfigError("tts.sample_rate must be positive")
 
     v_raw = raw.get("vl", {})
-    base_model = str(v_raw.get("model", ""))
-    model_large = str(v_raw.get("model_large", ""))
+    base_model = _beside_config(here, str(v_raw.get("model", "")))
+    model_large = _beside_config(here, str(v_raw.get("model_large", "")))
     min_ram = int(v_raw.get("model_large_min_ram_gb", 16))
     # Auto-select the richer model on big-RAM machines, else the smaller one (§6.1).
     effective_model = model_large if (model_large and total_ram_gb() >= min_ram) else base_model
@@ -240,12 +278,19 @@ def load_config(path: Path) -> Config:
     pp_raw = raw.get("preprocess", {})
     preprocess = PreprocessConfig(
         whisper_backend=str(pp_raw.get("whisper_backend", "mlx")),
-        whisper_model=str(pp_raw.get("whisper_model", "mlx-community/whisper-large-v3-turbo")),
+        whisper_model=_beside_config(
+            here, str(pp_raw.get("whisper_model", "mlx-community/whisper-large-v3-turbo"))
+        ),
         scene_threshold=float(pp_raw.get("scene_threshold", 0.3)),
         keyframe_dedup_max_distance=int(pp_raw.get("keyframe_dedup_max_distance", 5)),
         transcript_pad_s=float(pp_raw.get("transcript_pad_s", 2.0)),
         ocr=str(pp_raw.get("ocr", "auto")),
+        pointing=bool(pp_raw.get("pointing", True)),
+        pointing_min_dwell_s=float(pp_raw.get("pointing_min_dwell_s", 0.8)),
+        pointing_min_gap_s=float(pp_raw.get("pointing_min_gap_s", 10.0)),
     )
+    if preprocess.pointing_min_dwell_s <= 0.0 or preprocess.pointing_min_gap_s <= 0.0:
+        raise ConfigError("preprocess.pointing_min_dwell_s and pointing_min_gap_s must be positive")
     if not 0.0 <= preprocess.scene_threshold <= 1.0:
         raise ConfigError("preprocess.scene_threshold must be in [0, 1]")
     _check_choice(preprocess.ocr, OCR_MODES, "preprocess.ocr")

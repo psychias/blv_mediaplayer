@@ -23,3 +23,7 @@ app/build/
 # Local cache / generated artifacts
 *.wav
 *.vtt
+
+# Local assistant tooling — kept out of the repository
+CLAUDE.md
+.claude/

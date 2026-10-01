@@ -22,7 +22,7 @@ from typing import Any
 from . import audio, captions, mixer, prefilter, rungs
 from .cache import ArtifactCache, CachePaths, compute_key
 from .config import Config
-from .factory import build_preprocessor, build_tts, build_vl
+from .factory import build_preprocessor, build_tts, build_vl, free_mlx
 from .types import AudioClip, Moment, PipelineResult, Placement, ProgressSink
 
 MANIFEST_SCHEMA = "ladpipe-manifest/1"
@@ -48,6 +48,10 @@ class PrepareThenCacheOrchestrator:
         cfg = self._config
 
         base, moments, segments = build_preprocessor(cfg).run(video_path, progress)
+        # The forced t=0 keyframe is the opening frame, not a slide change (stream.py
+        # drops it too): with always-pause it would pause the video the instant playback
+        # starts, and merge_adjacent would anchor its line at 0.0.
+        moments = [m for m in moments if m.t_start >= 1.0]
 
         # --- VL stage (load vision, run the per-moment loop, then release) ---
         vl = build_vl(cfg)
@@ -62,10 +66,14 @@ class PrepareThenCacheOrchestrator:
             decision = vl.describe(m, rules)
             if decision.emit and decision.ad_text:
                 cap = cfg.vl.effective_max_ad_words
-                emits.append((m, rungs.cap_ad_words(decision.ad_text, cap)))
+                text = rungs.cap_ad_words(decision.ad_text, cap)
+                if m.kind == "pointing":
+                    text = rungs.pointing_cue(text)
+                emits.append((m, text))
             else:
                 suppressed.append(m.id)
         del vl  # free vision before loading TTS (§6.2)
+        free_mlx()
 
         # MAVP-style post-edit: fuse near-adjacent AD lines, then bookend the track so a
         # listener hears where the descriptions begin and end.

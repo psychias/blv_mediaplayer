@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from ladpipe.preprocess.local import (
     Segment,
     assemble_moments,
     dedup_indices,
     hamming,
     last_speech_end_in_span,
+    media_bin,
     next_segment_end,
     pause_starting_at,
     transcript_in_span,
@@ -67,3 +72,42 @@ def test_assemble_moments_builds_ordered_moments() -> None:
     # moment 0 spans [0,5): speech ends at 4.0, then a 2s pause until speech at 6.0
     assert moments[0].t_end == 4.0
     assert moments[0].pause_after == 2.0
+
+
+def test_media_bin_prefers_the_bundled_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The shipped .app carries its own ffmpeg; the machine it lands on may have none.
+    bundled = tmp_path / "media"
+    bundled.mkdir()
+    (bundled / "ffmpeg").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("LADPIPE_MEDIA_DIR", str(bundled))
+    assert media_bin("ffmpeg") == str(bundled / "ffmpeg")
+    # A name it does not carry still falls through to the usual search.
+    assert media_bin("ffprobe") != str(bundled / "ffprobe")
+
+
+def test_pointing_moments_sit_on_the_dwell_with_an_8s_transcript() -> None:
+    from ladpipe.preprocess.local import pointing_moments
+    from ladpipe.preprocess.pointing import Dwell
+
+    segments = [Segment(95.0, 99.0, "before"), Segment(101.0, 104.0, "here"),
+                Segment(106.0, 109.0, "after"), Segment(130.0, 133.0, "far")]
+    speech = [(95.0, 99.0), (101.0, 104.0), (106.0, 109.0), (130.0, 133.0)]
+    ms = pointing_moments(
+        events=[(1, Dwell(t=100.0, x=0.4, y=0.5, hold_s=2.0))],
+        keyframes=["/kf/p0.png"],
+        slide_times=[60.0, 90.0, 120.0],
+        audio_end=200.0,
+        segments=segments, speech=speech, ocr_by_index={1: "Slide two text"},
+    )
+    assert len(ms) == 1
+    m = ms[0]
+    assert m.id == "p000" and m.kind == "pointing" and m.visual_signal
+    assert m.t_start == 100.0 and m.keyframe_path == "/kf/p0.png"
+    assert m.transcript_window == "before here after"  # +/-8 s; "far" at 130 s excluded
+    assert m.ocr_text == "Slide two text"  # the slide the cursor rests on
+    # Span is min(next slide 120, dwell + 8 = 108); speech running past it clamps to 108,
+    # exactly as a slide's t_end clamps to the next scene.
+    assert m.t_end == 108.0
+

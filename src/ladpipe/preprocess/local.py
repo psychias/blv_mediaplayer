@@ -9,9 +9,12 @@ preprocessing time is max(transcript, vision), not their sum (§7 speed lever).
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -19,6 +22,8 @@ from pathlib import Path
 from .. import audio
 from ..config import Config
 from ..types import AudioClip, Moment, ProgressSink, TranscriptSegment
+from . import pointing
+from .pointing import Dwell
 
 _NO_BOUNDARY = 1e9  # sentinel offset so the rung ladder never time-shifts to a missing boundary
 _PTS_TIME = re.compile(r"pts_time:([0-9.]+)")
@@ -114,6 +119,47 @@ def assemble_moments(
     return moments
 
 
+def pointing_moments(
+    events: list[tuple[int, Dwell]],
+    keyframes: list[str],
+    slide_times: list[float],
+    audio_end: float,
+    segments: list[Segment],
+    speech: list[tuple[float, float]],
+    ocr_by_index: dict[int, str],
+) -> list[Moment]:
+    """One Moment per cursor dwell. Its span runs from the dwell to the next slide change,
+    capped at 8 s, and its transcript is the +/-8 s the model was trained with. It reuses
+    the slide's OCR: the slide has not changed, only the cursor has."""
+    times = sorted(slide_times)
+    out: list[Moment] = []
+    for k, ((j, dw), frame) in enumerate(zip(events, keyframes, strict=True)):
+        next_slide = next((t for t in times if t > dw.t), audio_end)
+        span_end = min(next_slide, dw.t + 8.0)
+        t_end = last_speech_end_in_span(speech, dw.t, span_end, default=dw.t)
+        nb = next_segment_end(t_end, segments)
+        if nb is None:
+            next_off, next_pause = _NO_BOUNDARY, 0.0
+        else:
+            next_off, next_pause = nb - t_end, pause_starting_at(nb, speech, audio_end)
+        out.append(
+            Moment(
+                id=f"p{k:03d}",
+                t_start=dw.t,
+                t_end=t_end,
+                keyframe_path=frame,
+                transcript_window=transcript_in_span(segments, dw.t - 8.0, dw.t + 8.0),
+                ocr_text=ocr_by_index.get(j, ""),
+                pause_after=pause_starting_at(t_end, speech, audio_end),
+                next_boundary_offset=next_off,
+                next_boundary_pause=next_pause,
+                visual_signal=True,
+                kind="pointing",
+            )
+        )
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Heavy I/O — lazy imports inside each method                                  #
 # --------------------------------------------------------------------------- #
@@ -160,6 +206,27 @@ class RealPreprocessor:
                 j: str(frames[i]) for j, i in enumerate(kept)
             }
 
+            # Cursor dwells on each static slide (also overlaps the transcript).
+            pointing_events: list[tuple[int, Dwell]] = []
+            pointing_frames: list[str] = []
+            if self._cfg.preprocess.pointing and kept_times:
+                progress.progress("preprocess", 0.80, "Finding pointing gestures")
+                intervals = list(zip(kept_times, [*kept_times[1:], audio_end], strict=True))
+                pointing_events = pointing.detect(
+                    media_bin("ffmpeg"), str(video_path), intervals,
+                    min_dwell_s=self._cfg.preprocess.pointing_min_dwell_s,
+                    min_gap_s=self._cfg.preprocess.pointing_min_gap_s,
+                )
+                pdir = work / "pointing"
+                pdir.mkdir(exist_ok=True)
+                for k, (_, dw) in enumerate(pointing_events):
+                    out = pdir / f"p{k:05d}.png"
+                    # 0.4 s into the hold: the cursor has settled and is still there.
+                    _ffmpeg(["-ss", f"{dw.t + 0.4:.3f}", "-i", str(video_path),
+                             "-frames:v", "1", str(out)])
+                    pointing.draw_pointer(str(out), dw.x, dw.y)
+                    pointing_frames.append(str(out))
+
             segments = transcript_future.result()
 
         progress.progress("preprocess", 0.95, "Assembling moments")
@@ -167,6 +234,14 @@ class RealPreprocessor:
             kept_times, audio_end, segments, speech, ocr_by_index, keyframe_by_index,
             pad=self._cfg.preprocess.transcript_pad_s,
         )
+        if pointing_events:
+            moments = sorted(
+                moments + pointing_moments(
+                    pointing_events, pointing_frames, kept_times, audio_end,
+                    segments, speech, ocr_by_index,
+                ),
+                key=lambda m: m.t_start,
+            )
         progress.progress("preprocess", 1.0, "Preprocessing complete")
         return base, moments, segments
 
@@ -223,9 +298,14 @@ class RealPreprocessor:
         model_ref = self._cfg.preprocess.whisper_model
         if self._cfg.preprocess.whisper_backend == "mlx":
             # mlx-whisper runs on the GPU (Apple Silicon) — much faster than CPU openai-whisper.
-            import mlx_whisper
-
-            result = mlx_whisper.transcribe(str(wav), path_or_hf_repo=model_ref)
+            # It runs in a CHILD process: once it has run in-process, later mlx-vlm
+            # generations degrade to NaN output (see whisper_worker.py). The child also
+            # takes whisper's 1.6 GB with it when it exits, before the VL model loads.
+            proc = subprocess.run(
+                [sys.executable, "-m", "ladpipe.preprocess.whisper_worker", str(wav), model_ref],
+                check=True, capture_output=True, text=True,
+            )
+            result = {"segments": json.loads(proc.stdout)}
         else:
             import whisper
 
@@ -253,7 +333,15 @@ _MEDIA_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
 
 def media_bin(name: str) -> str:
     """Resolve ffmpeg/ffprobe to an absolute path. A GUI app launched via LaunchServices
-    gets a minimal PATH without Homebrew's /opt/homebrew/bin, so relying on PATH fails."""
+    gets a minimal PATH without Homebrew's /opt/homebrew/bin, so relying on PATH fails.
+
+    ``LADPIPE_MEDIA_DIR`` wins when it is set: the shipped .app points it at its own
+    copies, because the machine it lands on may have no ffmpeg installed at all."""
+    bundled = os.environ.get("LADPIPE_MEDIA_DIR")
+    if bundled:
+        candidate = Path(bundled) / name
+        if candidate.exists():
+            return str(candidate)
     found = shutil.which(name)
     if found:
         return found

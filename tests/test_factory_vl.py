@@ -42,8 +42,8 @@ def test_unknown_vl_backend_rejected(mock_config: Config) -> None:
 
 
 def test_ocr_mode_controls_needs_ocr(mock_config: Config) -> None:
-    # auto defers to the model (default reads slides) -> no OCR; on/off are explicit.
-    for mode, expected in (("auto", False), ("on", True), ("off", False)):
+    # auto defers to the model; the text-only fine-tune needs OCR -> on. off is explicit.
+    for mode, expected in (("auto", True), ("on", True), ("off", False)):
         cfg = dataclasses.replace(
             mock_config, preprocess=dataclasses.replace(mock_config.preprocess, ocr=mode)
         )

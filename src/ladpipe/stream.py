@@ -27,7 +27,7 @@ from typing import Protocol
 from . import audio, captions, mixer, prefilter, rungs
 from .cache import compute_key
 from .config import Config, total_ram_gb
-from .factory import build_preprocessor, build_tts, build_vl
+from .factory import build_preprocessor, build_tts, build_vl, free_mlx
 from .preprocess.local import media_bin
 from .tts.base import TTSBackend
 from .types import AudioClip, Moment, Placement, ProgressSink, TranscriptSegment
@@ -186,10 +186,13 @@ class ChunkedStreamingOrchestrator:
             decision = active_vl.describe(m, rules)
             if decision.emit and decision.ad_text:
                 cap = cfg.vl.effective_max_ad_words
-                emits.append((m, rungs.cap_ad_words(decision.ad_text, cap)))
+                text = rungs.cap_ad_words(decision.ad_text, cap)
+                if m.kind == "pointing":
+                    text = rungs.pointing_cue(text)
+                emits.append((m, text))
         if vl is None:
             del active_vl
-            _free_mlx()
+            free_mlx()
 
         # MAVP-style post-edit: fuse near-adjacent AD lines. Bookend the opening only —
         # the last window isn't known until the stream ends, after its artifact is written.
@@ -227,7 +230,7 @@ class ChunkedStreamingOrchestrator:
                 renders.append((local_start - window.t_start, render_clip))
         if tts is None:
             del active_tts
-            _free_mlx()
+            free_mlx()
 
         out = mixer.build(window.base, renders)  # window-length, length-matched
         w = out_dir / f"w{window.index:03d}"
@@ -365,19 +368,6 @@ def _probe_duration(video: Path) -> float:
         check=True, capture_output=True, text=True,
     )
     return float(out.stdout.strip())
-
-
-def _free_mlx() -> None:
-    """Release a just-freed MLX model's GPU buffers before loading the next one."""
-    import gc
-
-    gc.collect()
-    try:
-        import mlx.core as mx
-
-        mx.clear_cache()
-    except (ImportError, AttributeError):  # pragma: no cover - environment-dependent
-        pass
 
 
 def _concat(clips: list[AudioClip]) -> AudioClip:

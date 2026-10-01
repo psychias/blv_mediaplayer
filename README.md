@@ -55,8 +55,8 @@ ladpipe run --mock --demo --json
 
 The real backends are implemented on a **single MLX runtime**: `RealPreprocessor` (ffmpeg + Whisper +
 Silero VAD + ffmpeg scene-detection keyframes + optional Apple Vision OCR, Whisper running
-concurrently with vision so preprocessing time is `max`, not `sum`), `MlxVlmBackend` (a 4-bit MLX VL
-model via mlx-vlm — vision GPU-resident), and `VoxtralTTSBackend` (Voxtral-4B-TTS via mlx-audio). All
+concurrently with vision so preprocessing time is `max`, not `sum`), `MlxVlmBackend` (an 8-bit MLX VL
+model via mlx-vlm — vision GPU-resident), and `KokoroTTSBackend` (Kokoro-82M via mlx-audio). All
 heavy libraries are lazy-imported inside the backends, so the core/mock path imports zero heavy deps.
 
 ```bash
@@ -64,12 +64,15 @@ heavy libraries are lazy-imported inside the backends, so the core/mock path imp
 pip install -e ".[real]" ".[build]"
 
 # 2. fetch + stage models once (needs internet once; the student never downloads anything)
-scripts/fetch_models.sh                 # -> models/gemma4-e2b-it-4bit, models/voxtral, models/whisper
+scripts/fetch_models.sh                 # -> models/ad4edu-qwen3vl-2b-lora + qwen3vl-2b-base, kokoro, whisper
+#    (the adapter repo is private: `hf auth login` first)
+pip install peft && python scripts/merge_adapter.py --base models/qwen3vl-2b-base \
+    --adapter models/ad4edu-qwen3vl-2b-lora/seed0 --out models/ad4edu-qwen3vl-2b-4bit
 
 # 3. config/real.yaml already selects the real backends:
-#    backends: {preprocess: local, vl: mlxvlm, tts: voxtral}
-#    vl.model -> models/gemma4-e2b-it-4bit   (or a repo id, or your fine-tuned MLX weights)
-#    tts.voxtral.model_path -> models/voxtral
+#    backends: {preprocess: local, vl: mlxvlm, tts: kokoro}
+#    vl.model -> models/ad4edu-qwen3vl-2b-4bit   (merged AD4Edu fine-tune; or any 4-bit MLX VL dir)
+#    tts.kokoro.model_path -> models/kokoro   (tts.voice: af_heart)
 
 # 4. run (fully offline once models are present)
 scripts/make_sample_video.sh sample.mp4   # or use your own lecture
@@ -77,17 +80,19 @@ ladpipe run --video sample.mp4 --config config/real.yaml
 ladpipe run --video sample.mp4 --config config/real.yaml   # second run = instant cache hit
 ```
 
-Backend selection is **config-only**: set `backends.{preprocess,vl,tts}` to `local`/`mlxvlm`/`voxtral`.
+Backend selection is **config-only**: set `backends.{preprocess,vl,tts}` to `local`/`mlxvlm`/`kokoro`
+(`voxtral` remains as a legacy TTS option).
 The VL **model** is also config-only — `vl.model` points at any 4-bit MLX VL weights (Gemma or
-Qwen3-VL; mlx-vlm auto-detects). Swapping in the fine-tuned model = convert it to MLX
-(`mlx_vlm.convert`) and repoint `vl.model`; that re-keys the cache automatically (§6.1). The app
+Qwen3-VL; mlx-vlm auto-detects). The shipped fine-tune is the AD4Edu LoRA merged into
+Qwen3-VL-2B-Instruct and quantised by `scripts/merge_adapter.py`; repointing `vl.model` re-keys the
+cache automatically (§6.1). The app
 auto-selects by RAM via `vl.model_large` (used on `>= model_large_min_ram_gb`).
 
 > **Requires:** `mlx-vlm` pinned **past the Gemma-4 PLE-quant fix (PR #893)** — early 4-bit Gemma-4
 > quants emitted gibberish. Smoke-test 4-bit output on one slide; gibberish ⇒ bump mlx-vlm (the
 > `-bf16` build is the higher-memory fallback). Use the **MLX** build of the model, not the `-gguf`
-> or `-w4a16-ct` variants. OCR (`preprocess.ocr: auto|on|off`) uses macOS-native Apple Vision and is
-> skipped when the VL model reads slides itself (Gemma).
+> or `-w4a16-ct` variants. OCR (`preprocess.ocr: auto|on|off`) uses macOS-native Apple Vision; the
+> AD4Edu fine-tune sees the keyframe plus the OCR line it was trained with, so `auto` resolves to on.
 
 ### Verified on a real 49-min anatomy lecture (Apple Silicon, 8 GB)
 
@@ -175,9 +180,25 @@ independently toggleable cue kinds — lecturer speech and audio description —
 distinctly (`<c.ad>` / `AD:` prefix) so description is never mistaken for the lecturer's words. The
 Phase 3 player adds low-vision controls (font size, contrast, position) and slide zoom.
 
-## Building the `.dmg` and bundled models (Phase 4 — not yet implemented)
+## Building a distributable app (`scripts/build_dist.sh`)
 
-The shipped app **bundles all models** (~5–7 GB: the 4-bit MLX VL model, the MLX Voxtral build,
+Run `scripts/build_dist.sh` to assemble a self-contained `dist/LectureAD.app` (~5.9 GB) that runs
+on any Apple Silicon Mac with nothing installed — no repo, no virtualenv, no Homebrew, no model
+downloads, no network. Into `Contents/Resources` it puts a relocatable standalone CPython with
+`ladpipe` and its real backends installed, the VL/Kokoro/Whisper weights, `ffmpeg` and `ffprobe`
+with their dylib closure relinked to `@executable_path`, and a `config.yaml` whose paths are all
+relative to `Resources`. `dev.json` becomes relative too, which `AppModel.bundleRelative` resolves
+inside the bundle. Send it with
+`ditto -c -k --keepParent dist/LectureAD.app LectureAD.zip`.
+
+Two things to know. The bundled `ffmpeg` is copied from your Homebrew install, which is a **GPL**
+build — redistributing it carries the GPL's source-offer obligation. And the cache lives in
+`~/Library/Application Support/LectureAD`, never inside the bundle, so the app never writes to
+itself.
+
+The `.dmg` (Phase 4) is still not implemented.
+
+The shipped app **bundles all models** (~3–4 GB: the 8-bit MLX VL model, the MLX Kokoro build,
 Whisper); the student downloads nothing and runs fully offline from first launch. Models are fetched
 **once at build time** by the developer (`scripts/fetch_models.sh`), then baked into the `.app`.
 
@@ -197,10 +218,9 @@ the real fix for wider release.
 ## Licenses of bundled models
 
 - **VL model (Gemma 4 / Qwen3-VL, MLX)** — permissive (Apache-2.0); bundle freely with attribution.
-- **Voxtral-4B-TTS + reference voices** — **CC-BY-NC-4.0**: non-commercial, attribution required.
-  Bundling it into the installer is redistribution, so this **blocks any commercial release** of a
-  bundle containing Voxtral. Not legal advice — confirm against each model card and your institution
-  before distributing.
+- **Kokoro-82M + voice packs** — Apache-2.0; bundle freely with attribution. (The earlier
+  Voxtral-4B-TTS option is CC-BY-NC-4.0 — non-commercial — and is no longer bundled.) Not legal
+  advice — confirm against each model card and your institution before distributing.
 - **Whisper** — MIT.
 
 Full attributions are documented in the repo and shown in-app (Phase 3).

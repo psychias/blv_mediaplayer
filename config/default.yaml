@@ -2,15 +2,15 @@
 # Backend selection is config-only (§2.4): swapping mock <-> real, or the base VL
 # model for the fine-tuned one, is a change here, never in code.
 
-pipeline_version: "0.1.1"
+pipeline_version: "0.1.2"   # bumped with real.yaml: cached artifacts predate the AD fixes
 
 backends:
   preprocess: mock   # mock | local
   vl: mock           # mock | mlxvlm
-  tts: mock          # mock | voxtral
+  tts: mock          # mock | kokoro | voxtral (legacy)
 
 # Slide-AD rules passed to the VL backend's describe(). Mock ignores it.
-rules_file: /Users/steliospsychias/Desktop/bvl_mediaplayer/rules_for_slides.yaml
+rules_file: ../rules_for_slides.yaml   # relative to this file, so a fresh clone works unedited
 
 prefilter:
   # Suppress a moment WITHOUT a VL call only when OCR/transcript cosine >= this
@@ -22,12 +22,14 @@ rungs:
   time_shift_cap_s: 5.0      # rung 3 hard cap (§7)
   placeholder_marker_s: 0.4  # rung 4 non-verbal marker length
   merge_gap_s: 3.0           # fuse AD lines whose moments sit <= this apart (0 = never)
+  # beat after a slide change before a pause-and-describe line starts (0 = on the change)
+  extended_settle_s: 1.2
 
 tts:
-  voice: neutral_female
+  voice: af_heart      # Kokoro voice pack name (models/kokoro/voices/<voice>.safetensors)
   sample_rate: 24000
-  # Real Voxtral backend (Phase 2) reads these; mock ignores them.
-  voxtral:
+  # Real Kokoro backend reads this; mock ignores it.
+  kokoro:
     model_path: ""
 
 vl:
@@ -38,7 +40,7 @@ vl:
   # Gemma "E2B"/4B builds OOM/time out on 8 GB. Use them only via model_large on 16 GB+.)
   # Point `model` at converted fine-tuned MLX weights to swap — a pure config change.
   model: mlx-community/Qwen3-VL-2B-Instruct-4bit
-  image_max_side: 768
+  image_max_side: 768   # downscale the keyframe fed to the VL encoder (smaller = faster)
   max_ad_words: 0    # 0 = no cap; set e.g. 14 to bound verbose AD (faster TTS, §7)
   verbosity: standard  # AD detail level: brief | standard | detailed
   model_large: ""               # optional richer model used on >= model_large_min_ram_gb
@@ -51,7 +53,13 @@ preprocess:
   scene_threshold: 0.3            # ffmpeg scene-change sensitivity (0-1)
   keyframe_dedup_max_distance: 5  # perceptual-hash hamming distance to drop duplicate slides
   transcript_pad_s: 2.0           # seconds of transcript context around each moment
-  ocr: auto                       # auto | on | off — feed slide OCR to the VL prompt (§6)
+  ocr: auto                       # auto | on | off — slide OCR for the VL prompt (§6); auto = on
+  # Cursor dwells: a deliberate mouse move that comes to rest becomes a "pointing" moment
+  # (preprocess/pointing.py). Scene detection cannot see the cursor at all, yet pointing
+  # is the largest class in the corpus the AD model was trained on.
+  pointing: true
+  pointing_min_dwell_s: 0.8   # the cursor must hold still this long
+  pointing_min_gap_s: 10.0    # at most one pointing moment per 10 s on a slide
 
 extended_ad:
   # Rung 0: briefly pause the video to voice a high-value description that fits no

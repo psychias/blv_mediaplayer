@@ -53,19 +53,37 @@ def cap_ad_words(text: str, max_words: int) -> str:
     return " ".join(kept).rstrip(" ,;:.") + "."
 
 
+_POINTING_WORDS = ("cursor", "pointer", "lecturer", "mouse", "points to", "points at", "pointing")
+
+
+def pointing_cue(text: str) -> str:
+    """Make a pointing description say that it is one. The fine-tune often names only what
+    sits under the cursor ("The plateau on the graph."), which a listener cannot place; when
+    it has not already said who points at what, lead with the gesture."""
+    low = text.lower()
+    if any(w in low for w in _POINTING_WORDS):
+        return text
+    return f"The lecturer points here. {text}"
+
+
 def merge_adjacent(
     emits: list[tuple[Moment, str]], gap_s: float
 ) -> list[tuple[Moment, str]]:
     """Merge emitted AD lines whose moments sit within ``gap_s`` of each other into one
     line (MAVP: merge descriptions <= 3 s apart) — one flowing description reads better
     than two staccato ones and needs only one gap. The merged moment spans both and
-    keeps the LATER moment's gap/boundary fields, since that's where the line lands."""
+    keeps the LATER moment's gap/boundary fields, since that's where the line lands.
+
+    Distance is measured start-to-start between consecutive moments: ``t_end`` is clamped
+    to the next scene time whenever speech runs across a slide change, so an end-to-start
+    gap is 0 for nearly every pair and would chain a whole lecture into one line."""
     if gap_s <= 0.0 or len(emits) < 2:
         return emits
     merged: list[tuple[Moment, str]] = [emits[0]]
+    last_start = emits[0][0].t_start
     for moment, text in emits[1:]:
         prev, prev_text = merged[-1]
-        if moment.t_start - prev.t_end <= gap_s:
+        if moment.t_start - last_start <= gap_s:
             combined = dataclasses.replace(
                 moment,
                 id=f"{prev.id}+{moment.id}",
@@ -75,6 +93,7 @@ def merge_adjacent(
             merged[-1] = (combined, f"{prev_text} {text}")
         else:
             merged.append((moment, text))
+        last_start = moment.t_start
     return merged
 
 
@@ -97,6 +116,15 @@ def bookend(
     return out
 
 
+def _settled_start(moment: Moment, cfg: RungConfig) -> float:
+    """Where a pause-and-describe line starts: a beat after the slide change, so the viewer
+    sees the new slide and hears the lecturer point at it ("in this myogram...") before the
+    video freezes. Never past the end of this slide's speech, which ``assemble_moments`` has
+    already clamped to the next slide change."""
+    start = moment.t_start + cfg.extended_settle_s
+    return min(start, moment.t_end) if moment.t_end > moment.t_start else start
+
+
 def place(
     moment: Moment,
     clip_duration: float,
@@ -107,7 +135,8 @@ def place(
 ) -> Placement:
     # Always-pause: skip gap-fitting entirely — pause the video and play the full AD.
     if always_pause and extended_ad_enabled:
-        return Placement(moment.id, 0, moment.t_start, clip_duration, 1.0, ad_text, False)
+        return Placement(moment.id, 0, _settled_start(moment, cfg), clip_duration, 1.0,
+                         ad_text, False)
 
     pause = moment.pause_after
 
@@ -129,7 +158,8 @@ def place(
 
     # Rung 0 — pause-and-describe (extended AD) for high-value content that won't fit.
     if extended_ad_enabled and moment.visual_signal:
-        return Placement(moment.id, 0, moment.t_start, clip_duration, 1.0, ad_text, False)
+        return Placement(moment.id, 0, _settled_start(moment, cfg), clip_duration, 1.0,
+                         ad_text, False)
 
     # Rung 4 — non-verbal placeholder marker (low-value, words not spoken).
     if pause >= cfg.placeholder_marker_s:

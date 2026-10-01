@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ladpipe import audio
 from ladpipe.config import Config
 from ladpipe.orchestrator import PrepareThenCacheOrchestrator
@@ -103,3 +105,38 @@ def test_progress_is_reported(mock_config: Config, tmp_path: Path) -> None:
     PrepareThenCacheOrchestrator(mock_config).prepare(_video(tmp_path), sink)
     stages = {s for s, _, _ in sink.events}
     assert {"preprocess", "vl", "tts", "done"} <= stages
+
+
+def test_opening_frame_is_not_described(
+    mock_config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The preprocessor always emits the t=0 keyframe; it is the opening frame, not a slide
+    # change, and must not become an AD line (nor anchor a merged line at 0.0).
+    import dataclasses
+    import json
+
+    from ladpipe import factory
+    from ladpipe import orchestrator as orch
+    from ladpipe.preprocess.base import Preprocessor
+    from ladpipe.types import AudioClip, Moment, ProgressSink, TranscriptSegment
+
+    class _WithOpeningFrame:
+        def __init__(self, inner: Preprocessor) -> None:
+            self._inner = inner
+
+        def run(
+            self, video_path: Path, progress: ProgressSink
+        ) -> tuple[AudioClip, list[Moment], list[TranscriptSegment]]:
+            base, moments, segments = self._inner.run(video_path, progress)
+            opening = dataclasses.replace(moments[0], id="m000", t_start=0.0, t_end=1.0)
+            return base, [opening, *moments], segments
+
+    monkeypatch.setattr(
+        orch, "build_preprocessor", lambda cfg: _WithOpeningFrame(factory.build_preprocessor(cfg))
+    )
+
+    result = PrepareThenCacheOrchestrator(mock_config).prepare(_video(tmp_path), NullProgress())
+    placements = json.loads(result.manifest_path.read_text())["placements"]
+    assert placements, "mock path should still produce descriptions"
+    assert all(p["start_time"] > 0.0 for p in placements)
+    assert not any(p["moment_id"].startswith("m000") for p in placements)

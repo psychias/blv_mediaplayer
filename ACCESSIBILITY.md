@@ -2,12 +2,11 @@
 
 This version makes LectureAD **fully operable without a mouse**, gives the listener
 **control over when and how much** audio description (AD) is spoken, and brings the
-whole UI to **WCAG 2.1 AA**. It was ported onto this repo from the `accessibility-overhaul`
-branch of the sibling `AD_video_player` repo and merged with this copy's newer features
-(streaming, `smoothPlayback`, find-in-lecture search).
+whole UI to **WCAG 2.1 AA**. It was merged with this copy's newer features (streaming,
+`smoothPlayback`, find-in-lecture search).
 
-- Port commit: `1a86bbf`
-- Follow-up crash fix: `8c6db1c` (see [Reliability](#reliability) below)
+- Port commit: `e49cbc7`
+- Follow-up crash fix: `d99d48f` (see [Reliability](#reliability) below)
 
 Verified end-to-end under the mock pipeline via an automated GUI walkthrough (keyboard
 driving + screenshots): 94 pytest tests, strict mypy, ruff, contrast audit 11/11 AA, and
@@ -98,8 +97,9 @@ share the one scheduler.
 
 The listener picks how much detail each description carries:
 
-- Changes the VL prompt's style budget and scales the per-line word cap
-  (`effective_max_ad_words`), so *brief* is one short sentence and *detailed* allows a few.
+- Scales the per-line word cap (`effective_max_ad_words`), so *brief* is one short sentence
+  and *detailed* allows a few. (The fine-tuned model is prompted in its fixed training
+  format, so the level no longer alters the prompt itself.)
 - Exposed as a `--verbosity` CLI flag, a `vl.verbosity` config field (part of the cache key,
   so each level caches separately), and an in-app menu (`⌥⌘7/8/9`).
 - **Switchable mid-session**: changing the level re-prepares via the sidecar while keeping
@@ -126,7 +126,7 @@ and jump to the moment, reflecting the finding that BLV users navigate by conten
 
 ### Reliability
 
-- **Fixed a streaming crash (`8c6db1c`):** writing a pacing credit to a sidecar that had
+- **Fixed a streaming crash (`d99d48f`):** writing a pacing credit to a sidecar that had
   already exited raised `SIGPIPE` and killed the app (opening any lecture in streaming mode
   crashed instantly under mock; real runs hit it once the sidecar finished). Now `SIGPIPE`
   is ignored process-wide so those writes fail harmlessly, as the code already intended.
@@ -154,13 +154,15 @@ and jump to the moment, reflecting the finding that BLV users navigate by conten
 
 ### On-device models (fully offline, Apple Silicon)
 
-- **Vision-language (AD generation):** a 4-bit MLX VL model via **mlx-vlm** — Qwen3-VL-2B on
-  8 GB machines; Gemma 4 / Qwen3-VL family, config-swappable (`vl.model`).
-- **Text-to-speech:** **Voxtral-4B-TTS** via **mlx-audio** (CC-BY-NC-4.0 — non-commercial).
+- **Vision-language (AD generation):** a 4-bit MLX VL model via **mlx-vlm** — Qwen3-VL-2B with
+  the **AD4Edu** audio-description LoRA merged in (Apache-2.0); config-swappable (`vl.model`).
+- **Text-to-speech:** **Kokoro-82M** (`af_heart` voice) via **mlx-audio** (Apache-2.0); English
+  G2P by **misaki** with a pip-bundled espeak-ng fallback for technical vocabulary.
 - **Speech-to-text:** **Whisper-large-v3-turbo** via **mlx-whisper** (GPU), with
   **openai-whisper** as the CPU fallback.
 - **Voice activity detection:** **Silero VAD** (finds the pauses AD is placed into).
-- **OCR:** macOS-native **Apple Vision** (skipped when the VL model reads slides itself).
+- **OCR:** macOS-native **Apple Vision** — the fine-tune sees the keyframe plus this OCR text,
+  as in training, so OCR is on unless `preprocess.ocr: off`.
 
 ### Tooling
 

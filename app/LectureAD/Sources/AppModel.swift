@@ -106,8 +106,20 @@ final class AppModel: ObservableObject {
     private func setting(_ env: String, _ key: String) -> String? {
         ProcessInfo.processInfo.environment[env] ?? devConfig[key] as? String
     }
-    private var sidecarCommand: String { setting("LADPIPE_CMD", "cmd") ?? "/usr/bin/false" }
-    private var configPath: String { setting("LADPIPE_CONFIG", "config") ?? "config/default.yaml" }
+    /// A relative path in dev.json resolves inside the bundle's Resources, so a shipped
+    /// .app carries its own sidecar, config and models and runs wherever it is installed.
+    /// An absolute path (the dev build writes one) is used as given.
+    private func bundleRelative(_ value: String?) -> String? {
+        guard let v = value, !v.isEmpty else { return nil }
+        guard !v.hasPrefix("/") else { return v }
+        return Bundle.main.resourceURL?.appendingPathComponent(v).path ?? v
+    }
+    private var sidecarCommand: String {
+        bundleRelative(setting("LADPIPE_CMD", "cmd")) ?? "/usr/bin/false"
+    }
+    private var configPath: String {
+        bundleRelative(setting("LADPIPE_CONFIG", "config")) ?? "config/default.yaml"
+    }
     private var useMock: Bool { setting("LADPIPE_MOCK", "mock") == "1" }
     private var useStreaming: Bool { setting("LADPIPE_STREAM", "stream") != "0" }
 
