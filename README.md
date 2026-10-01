@@ -1,49 +1,58 @@
-# LectureAD — offline lecture audio description for blind & low-vision students
+# LectureAD
 
-LectureAD takes a recorded slide-based lecture and produces an **enhanced audio track** with
-**audio description (AD)** woven into the gaps in the lecturer's speech, plus **WebVTT captions**
-(lecturer speech + AD text). It is **fully offline** and built for macOS / Apple Silicon. The
-heavy work runs once per lecture (**prepare-then-cache**); every later open is instant.
+LectureAD adds audio description to recorded slide-based lectures, for blind and low-vision
+students. It takes a lecture video and produces an enhanced audio track with description spoken
+into the gaps in the lecturer's speech, plus WebVTT captions for both the lecturer and the
+description.
 
-> **Status: Phase 1 complete** — the Python core (`ladpipe`) runs end-to-end on mock backends.
-> Real on-device models (Phase 2), the SwiftUI app (Phase 3) and the `.dmg` (Phase 4) follow.
+Everything runs on the machine. No audio, video or transcript leaves it, and after the models are
+installed there is no network traffic at all.
 
-> **This version's accessibility work** (keyboard-only operation, AD timing/verbosity control,
-> WCAG 2.1 AA) and the standards/models/tools behind it are documented in
-> [`ACCESSIBILITY.md`](ACCESSIBILITY.md).
+## What it does
 
-## What works today (Phase 1)
+For each lecture, the pipeline:
 
-The full pipeline — preprocess → redundancy pre-filter → VL decision → TTS → rung-ladder placement
-→ length-matched mix → WebVTT captions → cache — runs against **mock backends** that need **no GPU,
-no models, and no network**. This proves the plumbing and is what CI exercises.
+1. Extracts the audio, transcribes it with Whisper, and finds the silences with Silero VAD.
+2. Finds the moments worth describing. Slide changes come from ffmpeg scene detection. Pointing
+   gestures come from cursor tracking, which scene detection cannot see.
+3. Reads the slide text with Apple Vision OCR.
+4. Asks a vision-language model, for each moment, whether a description is needed and what it
+   should say. The model suppresses moments the lecturer already explains in words.
+5. Speaks the description with Kokoro, places it against the lecture timeline, and mixes a
+   length-matched audio track.
+6. Writes captions, a manifest and the audio to a cache.
+
+Preparation happens once per lecture. Every later open reads the cache and starts instantly.
+
+The macOS app is keyboard-operable, works with VoiceOver and meets WCAG 2.1 AA. Those features are
+documented in [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
 ## Requirements
 
-- macOS, Apple Silicon (Phase 2+). The Phase 1 core is pure Python and cross-platform.
-- Python 3.11+.
+- macOS on Apple Silicon, version 14 or later, to run the models.
+- Python 3.11 or later.
+- About 10 GB of disk for the models.
+- 8 GB of RAM is enough. 16 GB is faster, because the models stay loaded between windows.
 
-## Install (developer)
+The pipeline core is plain Python and runs anywhere against mock backends. Only the real models
+require Apple Silicon.
+
+## Quick start
+
+Install the developer environment and run the pipeline against mock backends. This needs no GPU,
+no models and no network, and is what the test suite exercises.
 
 ```bash
 python3.13 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"        # core + lint/type/test tooling (no heavy model deps)
-```
-
-Heavy real-backend deps live in the `real` extra and are **not** needed for Phase 1:
-`pip install -e ".[real]"` (Phase 2).
-
-## Run the mock demo (Phase 1 gate)
-
-```bash
+pip install -e ".[dev]"
 ladpipe run --mock --demo
 ```
 
-This writes a length-matched `.wav`, a `.vtt` with lecturer **and** AD cues, and a `.json` manifest
-into the cache dir (default `~/Library/Application Support/LectureAD/cache`), and prints the
-per-rung spread. Re-running is an instant cache hit.
+That writes a length-matched `.wav`, a `.vtt` with both lecturer and description cues, and a
+`.json` manifest into `~/Library/Application Support/LectureAD/cache`, then prints how the
+descriptions were placed. Running it again is a cache hit.
 
-Sidecar mode (the macOS app, Phase 3, drives this) emits newline-delimited JSON events:
+The macOS app drives the same command as a sidecar and reads newline-delimited JSON events:
 
 ```bash
 ladpipe run --mock --demo --json
@@ -51,176 +60,211 @@ ladpipe run --mock --demo --json
 # {"event":"done","artifact":".../<hash>.wav","captions":".../<hash>.vtt","manifest":".../<hash>.json"}
 ```
 
-## Run on a real lecture (Phase 2)
+## Running a real lecture
 
-The real backends are implemented on a **single MLX runtime**: `RealPreprocessor` (ffmpeg + Whisper +
-Silero VAD + ffmpeg scene-detection keyframes + optional Apple Vision OCR, Whisper running
-concurrently with vision so preprocessing time is `max`, not `sum`), `MlxVlmBackend` (an 8-bit MLX VL
-model via mlx-vlm — vision GPU-resident), and `KokoroTTSBackend` (Kokoro-82M via mlx-audio). All
-heavy libraries are lazy-imported inside the backends, so the core/mock path imports zero heavy deps.
+Install the model dependencies, fetch the weights once, then merge the adapter into its base model.
 
 ```bash
-# 1. install heavy deps (Apple Silicon) and build-time tooling
 pip install -e ".[real]" ".[build]"
 
-# 2. fetch + stage models once (needs internet once; the student never downloads anything)
-scripts/fetch_models.sh                 # -> models/ad4edu-qwen3vl-2b-lora + qwen3vl-2b-base, kokoro, whisper
-#    (the adapter repo is private: `hf auth login` first)
-pip install peft && python scripts/merge_adapter.py --base models/qwen3vl-2b-base \
-    --adapter models/ad4edu-qwen3vl-2b-lora/seed0 --out models/ad4edu-qwen3vl-2b-4bit
+# Fetch the adapter, its base model, Kokoro and Whisper into models/
+scripts/fetch_models.sh
 
-# 3. config/real.yaml already selects the real backends:
-#    backends: {preprocess: local, vl: mlxvlm, tts: kokoro}
-#    vl.model -> models/ad4edu-qwen3vl-2b-4bit   (merged AD4Edu fine-tune; or any 4-bit MLX VL dir)
-#    tts.kokoro.model_path -> models/kokoro   (tts.voice: af_heart)
+# Merge the adapter into the base and quantise to 8-bit MLX
+pip install peft
+python scripts/merge_adapter.py \
+  --base models/qwen3vl-2b-base \
+  --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 \
+  --out models/ad4edu-qwen3vl-2b-mm-8bit
 
-# 4. run (fully offline once models are present)
-scripts/make_sample_video.sh sample.mp4   # or use your own lecture
+# Run. config/real.yaml already points at these paths.
+scripts/make_sample_video.sh sample.mp4    # or use your own lecture
 ladpipe run --video sample.mp4 --config config/real.yaml
-ladpipe run --video sample.mp4 --config config/real.yaml   # second run = instant cache hit
 ```
 
-Backend selection is **config-only**: set `backends.{preprocess,vl,tts}` to `local`/`mlxvlm`/`kokoro`
-(`voxtral` remains as a legacy TTS option).
-The VL **model** is also config-only — `vl.model` points at any 4-bit MLX VL weights (Gemma or
-Qwen3-VL; mlx-vlm auto-detects). The shipped fine-tune is the AD4Edu LoRA merged into
-Qwen3-VL-2B-Instruct and quantised by `scripts/merge_adapter.py`; repointing `vl.model` re-keys the
-cache automatically (§6.1). The app
-auto-selects by RAM via `vl.model_large` (used on `>= model_large_min_ram_gb`).
+The description model is `Psychias/ad4edu-qwen3vl-2b-sft`, an adapter trained on the AD4Edu corpus
+and merged into Qwen3-VL-2B-Instruct. Merge at 8 bits. At 4 bits the merged model stops returning
+the JSON its training expects and produces loose text instead.
 
-> **Requires:** `mlx-vlm` pinned **past the Gemma-4 PLE-quant fix (PR #893)** — early 4-bit Gemma-4
-> quants emitted gibberish. Smoke-test 4-bit output on one slide; gibberish ⇒ bump mlx-vlm (the
-> `-bf16` build is the higher-memory fallback). Use the **MLX** build of the model, not the `-gguf`
-> or `-w4a16-ct` variants. OCR (`preprocess.ocr: auto|on|off`) uses macOS-native Apple Vision; the
-> AD4Edu fine-tune sees the keyframe plus the OCR line it was trained with, so `auto` resolves to on.
+Backends are selected in config, under `backends`: `local` for preprocessing, `mlxvlm` for the
+description model, `kokoro` for speech. A `voxtral` speech backend remains for compatibility but is
+not bundled. Pointing `vl.model` at different weights re-keys the cache, so the next run prepares
+from scratch rather than serving a stale result.
 
-### Verified on a real 49-min anatomy lecture (Apple Silicon, 8 GB)
+The MLX versions are pinned in `pyproject.toml` and should not be raised casually. mlx 0.32 breaks
+this quantisation and mlx-vlm 0.6.4 stopped attaching images to the prompt. Either fault silently
+suppresses all description rather than failing loudly.
 
-The full real pipeline was validated end to end and **with Wi-Fi physically disabled** — Whisper
-transcript, Silero VAD, VL slide descriptions, Voxtral synthesis, length-matched mix + both WebVTT
-tracks + manifest, all offline. A second run is an instant cache hit; changing `vl.model` invalidates
-the cache.
+### Two details worth knowing
 
-Operational notes:
+**The description model runs in a child process.** The pinned MLX stack starts returning NaN logits
+after roughly 70 generations in a single process, which decode to punctuation and are discarded by
+the parser. Before this was found, the back half of every lecture was silently left undescribed.
+Reloading the weights does not clear it. Only a fresh process does, so the parent restarts the
+worker every 32 generations and again if a bad reply appears. Whisper runs in its own child process
+for the same reason, and because that frees its memory before the description model loads.
 
-- **One MLX runtime, vision GPU-resident.** The earlier llama.cpp/GGUF VL path fell back off the GPU
-  on 8 GB (~40 s/call); 4-bit MLX via mlx-vlm keeps language **and** vision on the GPU (~4 s/call).
-  VL and TTS are still loaded sequentially (VL over the moment loop, then TTS) to fit 8–16 GB.
-- **Transcription on the GPU.** `preprocess.whisper_backend: mlx` runs Whisper-turbo via `mlx-whisper`
-  at ~0.10× real-time (measured) vs ~0.35× for CPU `openai-whisper` — it cut first-open time roughly
-  in half (a 90-min lecture ≈ 24 min on 8 GB, then instant from cache). `openai` is the CPU fallback.
-- **Silero VAD** is fed the already-extracted 16 kHz samples directly (its `read_audio` now needs
-  `torchcodec`, which we don't depend on).
-- **Gap-fit / extended AD.** On a real lecture, gaps are tiny (median best-gap ~1.8 s, max ~4 s; see
-  `analysis/gap_fit_report.md`), so gap-only placement drops most AD. The rung ladder therefore uses
-  **rung 0 (pause-and-describe)** for high-value content that fits no gap — the played timeline grows
-  by the total pause time; the audio track stays length-matched. The rules YAML is condensed to its
-  operative `rule:` statements before prompting (32 KB → 9 KB).
+**Each keyframe is classified before it is described.** The moment type given to the model strongly
+affects whether it describes anything at all. Labelled as a slide, it suppresses almost everything,
+including graphs. So the pipeline asks the model one short question about the frame first, then
+describes it with the right label.
 
-## Develop
+## Configuration
+
+`config/real.yaml` runs the real models. `config/default.yaml` runs the mock ones. Paths in both are
+relative to the config file, so a fresh clone works without editing.
+
+| Key | Default | What it controls |
+|---|---|---|
+| `preprocess.scene_threshold` | 0.15 | Slide-change sensitivity. 0.3 missed 15 of 41 real slide changes on a textbook deck. |
+| `preprocess.pointing` | true | Turn cursor-dwell detection on or off. |
+| `preprocess.pointing_min_dwell_s` | 0.8 | How long the cursor must hold still to count as pointing. |
+| `preprocess.pointing_min_gap_s` | 10.0 | Minimum spacing between pointing descriptions on one slide. |
+| `preprocess.ocr` | auto | Slide text extraction. Resolves to on, because the model was trained with it. |
+| `vl.max_ad_words` | 30 | Upper bound on description length. The model already fits its text to the pause. |
+| `vl.verbosity` | standard | `brief`, `standard` or `detailed`. Scales the word cap. |
+| `vl.image_max_side` | 640 | Keyframe size sent to the model. At 384 it invented graph detail. |
+| `rungs.merge_gap_s` | 3.0 | Fuses descriptions whose moments sit this close together. |
+| `rungs.extended_settle_s` | 1.2 | How long after a slide change the video pauses to describe it. |
+| `extended_ad.always_pause` | true | Pause for every description instead of squeezing it into a gap. |
+| `player.captions_default_on` | true | Whether captions start visible. |
+| `pipeline_version` | 0.1.3 | Bump to invalidate every cached lecture. |
+
+`extended_settle_s` exists because pausing on the exact frame the slide appears gives the viewer no
+time to see it, and cuts the lecturer off mid-sentence. Waiting a moment lets the slide register and
+the lecturer's own "in this diagram" be heard first.
+
+Note that `always_pause` is on in the real profile. Descriptions therefore always pause the video
+rather than being fitted into gaps. On real lectures the gaps are too short to be useful: the median
+best gap is about 1.8 seconds and the longest about 4, measured in
+[analysis/gap_fit_report.md](analysis/gap_fit_report.md).
+
+## The macOS app
+
+A SwiftUI app in `app/LectureAD/` drives the pipeline as a sidecar and plays the result. It builds
+without Xcode, using the command line tools:
 
 ```bash
-scripts/test.sh             # pytest (no GPU/network)
-scripts/lint.sh             # ruff
-scripts/type.sh             # mypy --strict
-scripts/demo.sh             # ladpipe run --mock --demo
-scripts/fetch_models.sh     # build-time: fetch + stage bundled models (Phase 2/4)
-scripts/make_sample_video.sh  # tiny synthetic 2-slide lecture for testing the real path
+app/build_app.sh                       # produces app/build/LectureAD.app, ad-hoc signed
+open app/build/LectureAD.app
 ```
 
-## macOS app (Phase 3)
+The app opens a lecture, shows preparation progress announced through VoiceOver, then plays the
+video frames against the cached enhanced audio. Captions appear as two tracks, lecturer and
+description, which toggle independently. Description cues are styled distinctly so they are never
+mistaken for the lecturer's words. Font size, contrast, caption position and video zoom are
+adjustable and persist between sessions.
 
-A native **SwiftUI** app (`app/LectureAD/`) drives the Python core as a sidecar over the JSON-events
-protocol and plays the result. It builds **without Xcode** (CLT `swiftc` + the macOS SDK):
+When a description needs more time than the lecture allows, the player pauses the video, plays the
+description, then resumes. Playing a lecture never triggers the models; the player only reads a
+finished cached artifact.
 
-```bash
-app/build_app.sh                     # -> app/build/LectureAD.app  (ad-hoc signed)
+Every control has a keyboard shortcut and a VoiceOver label. Space plays and pauses, J and L skip,
+Cmd-F searches the transcript and the descriptions, and Cmd-/ opens the shortcut list.
+[ACCESSIBILITY.md](ACCESSIBILITY.md) documents the full set.
 
-# run in development (real backends + the verified 8 GB model)
-LADPIPE_CMD="$PWD/.venv/bin/ladpipe" LADPIPE_CONFIG="$PWD/config/real.yaml" \
-  open app/build/LectureAD.app
-# or a no-models UI demo: add LADPIPE_MOCK=1 LADPIPE_CONFIG="$PWD/config/default.yaml"
-```
+Verifying VoiceOver speech and screen-off operation is a manual step on a Mac with a display
+session. Building, bundling and launching are automated.
 
-The app: pick a lecture → **accessible, VoiceOver-announced** preparation progress (driven by the
-sidecar events) → a player that shows the **video frames + cached enhanced audio** (one
-`AVMutableComposition`; the original audio track is dropped) with **caption overlays**. Two caption
-tracks (lecturer + AD) toggle independently, AD cues are styled distinctly (yellow, "AD:"), and
-font size / high-contrast / position / video zoom are adjustable and persisted. **Extended AD
-(rung 0)** is realised by the player: it pauses the video at each `descriptions` cue, plays the
-matching `.ext.wav` segment, then resumes. All controls have VoiceOver labels and keyboard shortcuts
-(space play/pause, J/L skip ±15 s); the player only ever reads a finished cached artifact — pressing
-play never triggers inference. The sidecar is the dev `ladpipe` now; Phase 4 swaps in the frozen
-bundled binary (no code change).
+## Streaming mode
 
-> Interactive verification (VoiceOver speech, playback, screen-off operation) is a human step on a
-> Mac with a display session; the build/bundle/launch are automated by `app/build_app.sh`.
-
-## Streaming — start in under 5 minutes
-
-`ladpipe stream` prepares the lecture in **windows** and emits a `window_ready` event after each, so
-playback can begin after window 0 instead of after the whole lecture (§12):
+`ladpipe stream` prepares a lecture in windows and emits an event after each one, so playback can
+start after the first window instead of after the whole lecture.
 
 ```bash
-ladpipe stream --video sample.mp4 --config config/real.yaml --window 90 --json
+ladpipe stream --video sample.mp4 --config config/real.yaml --window 90 --lookahead 2 --json
 # {"event":"window_ready","index":0,"t_start":0,"t_end":90,"artifact":".../w000.wav", ...}
 ```
 
-Measured on 8 GB: **first window ready ~3.3 min** (vs ~24 min to fully prepare a 90-min lecture) —
-the player can start then while the rest streams in. On ≥14 GB RAM the VL and TTS models stay warm
-across windows; on 8 GB they load sequentially per window (so three MLX models never sit in the GPU
-together). Caveat: on 8 GB with the verbose *base* model, per-window prep can exceed a window's
-playback length (possible stalls); concise fine-tuned AD and/or ≥16 GB remove that. Player-side
-consumption (AVQueuePlayer over `window_ready`) is the remaining integration.
+On an 8 GB machine the first window is ready in about 3.3 minutes, against roughly 24 minutes to
+prepare a 90-minute lecture in full. `--lookahead` bounds how far ahead of the viewer the pipeline
+works, so it does not occupy the GPU during playback.
 
-## Captions
+On 16 GB or more the models stay loaded across windows. On 8 GB they load one at a time per window,
+so three MLX models never sit in memory together. On 8 GB with a verbose model, preparing a window
+can take longer than the window takes to play, which stalls playback; a concise model or more memory
+removes that.
 
-Captions are **on by default** (`player.captions_default_on: true`). The WebVTT carries two
-independently toggleable cue kinds — lecturer speech and audio description — with AD cues marked
-distinctly (`<c.ad>` / `AD:` prefix) so description is never mistaken for the lecturer's words. The
-Phase 3 player adds low-vision controls (font size, contrast, position) and slide zoom.
+The player consumes these events into a single growing composition on the lecture timeline rather
+than a forward-only queue, so the viewer can scrub anywhere already prepared.
 
-## Building a distributable app (`scripts/build_dist.sh`)
+## Building a distributable app
 
-Run `scripts/build_dist.sh` to assemble a self-contained `dist/LectureAD.app` (~5.9 GB) that runs
-on any Apple Silicon Mac with nothing installed — no repo, no virtualenv, no Homebrew, no model
-downloads, no network. Into `Contents/Resources` it puts a relocatable standalone CPython with
-`ladpipe` and its real backends installed, the VL/Kokoro/Whisper weights, `ffmpeg` and `ffprobe`
-with their dylib closure relinked to `@executable_path`, and a `config.yaml` whose paths are all
-relative to `Resources`. `dev.json` becomes relative too, which `AppModel.bundleRelative` resolves
-inside the bundle. Send it with
-`ditto -c -k --keepParent dist/LectureAD.app LectureAD.zip`.
+`scripts/build_dist.sh` assembles a self-contained `dist/LectureAD.app` of about 5.9 GB that runs on
+any Apple Silicon Mac with nothing installed: no repository, no virtual environment, no Homebrew, no
+model downloads and no network.
 
-Two things to know. The bundled `ffmpeg` is copied from your Homebrew install, which is a **GPL**
-build — redistributing it carries the GPL's source-offer obligation. And the cache lives in
+```bash
+scripts/build_dist.sh
+ditto -c -k --keepParent dist/LectureAD.app LectureAD.zip
+```
+
+Into the bundle it puts a relocatable standalone Python with the pipeline installed, the three
+models at about 4.4 GB in total, and `ffmpeg` and `ffprobe` relinked to load from inside the app.
+The config it writes uses paths relative to the bundle, so the app works from wherever it is
+installed.
+
+Two things to know. The bundled `ffmpeg` is copied from your Homebrew installation, which is a GPL
+build, so redistributing it carries the GPL's obligation to offer source. And the cache lives in
 `~/Library/Application Support/LectureAD`, never inside the bundle, so the app never writes to
 itself.
 
-The `.dmg` (Phase 4) is still not implemented.
+## Installing on another Mac
 
-The shipped app **bundles all models** (~3–4 GB: the 8-bit MLX VL model, the MLX Kokoro build,
-Whisper); the student downloads nothing and runs fully offline from first launch. Models are fetched
-**once at build time** by the developer (`scripts/fetch_models.sh`), then baked into the `.app`.
+The build is ad-hoc signed and not notarised, because notarisation needs a paid Apple Developer ID.
+On first open macOS will warn. To allow it once, do either:
 
-### Gatekeeper (unsigned build) — one-time first-open step
+- Right-click the app, choose Open, then Open again.
+- Run `xattr -dr com.apple.quarantine /Applications/LectureAD.app`.
 
-The app is **ad-hoc signed, not notarized** (no paid Apple Developer ID). On first open on another
-Mac, macOS Gatekeeper will warn. To open it the first time, do **one** of:
+After that it launches normally. The first lecture takes a few minutes to prepare and every later
+open of it is instant.
 
-- Right-click (or Control-click) the app in Applications, choose **Open**, then **Open** again; or
-- Run: `xattr -dr com.apple.quarantine /Applications/LectureAD.app`
+## Performance
 
-After this one-time step the app launches normally. This friction is inherent to unsigned
-distribution; the build keeps signing/notarization as a config-only upgrade if a Developer ID is
-ever added (`SIGNING_IDENTITY` in `scripts/build_dmg.sh`). The `$99/yr` Apple Developer Program is
-the real fix for wider release.
+Measured on an 8 GB Apple Silicon machine, with Wi-Fi switched off, against a 49-minute anatomy
+lecture.
 
-## Licenses of bundled models
+- **One MLX runtime, vision on the GPU.** An earlier llama.cpp path fell back to the CPU on 8 GB and
+  took about 40 seconds per description. MLX keeps both language and vision on the GPU, at about 4
+  seconds per description.
+- **Transcription on the GPU.** `preprocess.whisper_backend: mlx` runs Whisper turbo at about 0.10
+  times real time, against 0.35 for the CPU build. That roughly halved first-open time. A 90-minute
+  lecture takes about 24 minutes to prepare, then opens instantly from cache.
+- **Voice activity detection runs first and single-threaded**, because the first import of torch is
+  not thread safe. Whisper then runs alongside keyframe extraction and OCR, so preprocessing costs
+  the longer of the two rather than their sum.
+- **Silero VAD** is fed the already-extracted 16 kHz samples directly, because its own audio loader
+  now needs a dependency this project does not carry.
 
-- **VL model (Gemma 4 / Qwen3-VL, MLX)** — permissive (Apache-2.0); bundle freely with attribution.
-- **Kokoro-82M + voice packs** — Apache-2.0; bundle freely with attribution. (The earlier
-  Voxtral-4B-TTS option is CC-BY-NC-4.0 — non-commercial — and is no longer bundled.) Not legal
-  advice — confirm against each model card and your institution before distributing.
-- **Whisper** — MIT.
+## Development
 
-Full attributions are documented in the repo and shown in-app (Phase 3).
+```bash
+source .venv/bin/activate     # the scripts below call pytest, ruff and mypy directly
+
+scripts/test.sh               # 123 tests, no GPU and no network
+scripts/lint.sh               # ruff
+scripts/type.sh               # mypy, strict
+scripts/demo.sh               # ladpipe run --mock --demo
+scripts/contrast_audit.py     # checks every app colour against WCAG AA
+scripts/analyze_gap_fit.py    # regenerates analysis/gap_fit_report.md
+```
+
+The mock backends are interchangeable with the real ones, so a passing test suite exercises the same
+orchestration the real path uses. Heavy libraries are imported inside their backends, which keeps
+the mock path free of them.
+
+## Model licences
+
+- **Qwen3-VL-2B-Instruct**, with the AD4Edu adapter merged in: Apache 2.0.
+- **Kokoro-82M** and its voice packs: Apache 2.0.
+- **Whisper**: MIT.
+
+All three can be bundled and redistributed with attribution. The bundled `ffmpeg` is GPL, as noted
+above. This is not legal advice; check each model card and your own institution's position before
+distributing.
+
+## Roadmap
+
+- A `.dmg` installer. The app is built and distributable as a zip today.
+- Notarisation, which needs a paid Apple Developer ID and removes the first-open warning.
