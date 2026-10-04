@@ -95,20 +95,6 @@ The MLX versions are pinned in `pyproject.toml` and should not be raised casuall
 this quantisation and mlx-vlm 0.6.4 stopped attaching images to the prompt. Either fault silently
 suppresses all description rather than failing loudly.
 
-### Two details worth knowing
-
-**The description model runs in a child process.** The pinned MLX stack starts returning NaN logits
-after roughly 70 generations in a single process, which decode to punctuation and are discarded by
-the parser. Before this was found, the back half of every lecture was silently left undescribed.
-Reloading the weights does not clear it. Only a fresh process does, so the parent restarts the
-worker every 32 generations and again if a bad reply appears. Whisper runs in its own child process
-for the same reason, and because that frees its memory before the description model loads.
-
-**Each keyframe is classified before it is described.** The moment type given to the model strongly
-affects whether it describes anything at all. Labelled as a slide, it suppresses almost everything,
-including graphs. So the pipeline asks the model one short question about the frame first, then
-describes it with the right label.
-
 ## Configuration
 
 `config/real.yaml` runs the real models. `config/default.yaml` runs the mock ones. Paths in both are
