@@ -124,3 +124,24 @@ def test_cli_verbosity_flag_overrides_config(tmp_path: Path) -> None:
     # Without the flag, the config value wins.
     args = build_parser().parse_args(["stream", "--video", "v.mp4", "--config", str(cfg)])
     assert _load(args).vl.verbosity == "brief"
+
+
+def test_config_hash_ignores_install_location(tmp_path: Path) -> None:
+    """Same config and same model directory names in two checkouts hash the same, so a
+    moved checkout or .app bundle keeps its cache."""
+    hashes = []
+    for name in ("a", "b"):
+        root = tmp_path / name
+        (root / "models" / "vl-8bit").mkdir(parents=True)
+        (root / "models" / "whisper").mkdir()
+        (root / "config").mkdir()
+        rules = root / "rules.yaml"
+        rules.write_text("rules: []\n")
+        cfg = root / "config" / "real.yaml"
+        cfg.write_text(
+            DEFAULT.read_text()
+            .replace("rules_file: ../rules_for_slides.yaml", "rules_file: ../rules.yaml")
+            .replace("model: mlx-community/Qwen3-VL-2B-Instruct-4bit", "model: ../models/vl-8bit")
+        )
+        hashes.append(load_config(cfg).config_hash())
+    assert hashes[0] == hashes[1]

@@ -152,19 +152,27 @@ class Config:
         return self.preprocess.ocr != "off"
 
     def config_hash(self) -> str:
-        """Stable hash over tunables that affect the artifact (for the cache key)."""
+        """Stable hash over tunables that affect the artifact (for the cache key).
+
+        Model references that resolved to a local directory are hashed by their directory
+        name, not their absolute path, so the cache survives moving the checkout or the
+        .app bundle. A Hugging Face repo id or a bare model name is hashed as written."""
+        vl = {
+            k: v
+            for k, v in asdict(self.vl).items()
+            if k not in ("model_large", "model_large_min_ram_gb")
+        }
+        vl["model"] = _model_identity(self.vl.model)
+        preprocess = asdict(self.preprocess)
+        preprocess["whisper_model"] = _model_identity(self.preprocess.whisper_model)
         payload = {
             "prefilter": asdict(self.prefilter),
             "rungs": asdict(self.rungs),
             "tts": {"voice": self.tts.voice, "sample_rate": self.tts.sample_rate},
             # Only the effective model + image size affect the artifact; the
             # large-model provenance fields do not.
-            "vl": {
-                k: v
-                for k, v in asdict(self.vl).items()
-                if k not in ("model_large", "model_large_min_ram_gb")
-            },
-            "preprocess": asdict(self.preprocess),
+            "vl": vl,
+            "preprocess": preprocess,
             "extended_ad": asdict(self.extended_ad),
         }
         blob = json.dumps(payload, sort_keys=True).encode()
@@ -183,6 +191,13 @@ def _resolved_backend(base: Path, raw: Any) -> dict[str, Any]:
     if "model_path" in out:
         out["model_path"] = _beside_config(base, str(out["model_path"]))
     return out
+
+
+def _model_identity(value: str) -> str:
+    """The part of a model reference that identifies the weights: a local directory's
+    name, or the repo id / model name unchanged."""
+    p = Path(value)
+    return p.name if p.is_absolute() and p.exists() else value
 
 
 def _beside_config(base: Path, value: str) -> str:
