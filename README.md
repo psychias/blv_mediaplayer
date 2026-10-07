@@ -37,8 +37,6 @@ documented in [ACCESSIBILITY.md](ACCESSIBILITY.md).
 - `ffmpeg` and `ffprobe` on the PATH, for example `brew install ffmpeg`.
 - About 7 GB of free disk for the models and the environment.
 - 8 GB of RAM is enough. 16 GB is faster, because the models stay loaded between windows.
-- A Hugging Face account, for the one-time model fetch. The description model is a private
-  repository.
 
 The pipeline core is plain Python and runs anywhere against mock backends. Only the real models
 require Apple Silicon.
@@ -76,13 +74,11 @@ A cache hit emits a single `cache_hit` event with the same four paths instead of
 
 ## Running a real lecture
 
-Install the model dependencies and fetch the weights once. About 4.3 GB is downloaded.
+Install the model dependencies and fetch the weights once. About 4.3 GB is downloaded from
+public Hugging Face repositories; no account is needed.
 
 ```bash
 uv pip install -e ".[real,build]"
-
-# The description model is private: sign in once, or export HF_TOKEN
-hf auth login
 
 # Fetch the description model, Kokoro and Whisper into models/
 scripts/fetch_models.sh
@@ -99,7 +95,7 @@ description track, and the run says so with `No slide changes or pointing moment
 synthetic sample has one strong slide change at four seconds, so it produces exactly one
 description.
 
-The description model is `Psychias/ad4edu-qwen3vl-2b-mm-8bit`: the public
+The description model is `Psychias/ad4edu-qwen3vl-2b-mm-8bit`: the
 `Hermeneia/ad4edu-qwen3vl-2b-sft` adapter, trained on the AD4Edu corpus, merged into
 Qwen3-VL-2B-Instruct and quantised to 8-bit MLX.
 It is merged at 8 bits because at 4 bits the merged model stops returning the JSON its training

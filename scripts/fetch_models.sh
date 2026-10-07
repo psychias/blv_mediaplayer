@@ -6,7 +6,7 @@
 # into the .app bundle's Resources/models/ in Phase 4):
 #   models/
 #     ad4edu-qwen3vl-2b-mm-8bit/  description model: AD4Edu adapter merged into Qwen3-VL-2B,
-#                                 8-bit MLX (private repo), ready to run — no merge step
+#                                 8-bit MLX (public repo), ready to run — no merge step
 #     kokoro/               mlx-community Kokoro-82M build + the af_heart voice pack
 #     whisper/              whisper-large-v3-turbo in MLX format (what mlx-whisper loads)
 #
@@ -18,8 +18,8 @@
 #
 # Requires: pip install -e ".[build]"   (huggingface_hub)
 #
-# The merged description model is PRIVATE: run `hf auth login` (or export HF_TOKEN) first.
-# The adapter and every other repo are public.
+# Every repo is public: no Hugging Face login is needed. A token (HF_TOKEN or `hf auth login`)
+# only raises the rate limit.
 #
 # REPRODUCIBILITY: pin exact commit hashes in the *_REV vars below. They default to
 # "main" with a warning — a real release build MUST pin them so every build matches
@@ -52,11 +52,6 @@ KOKORO_VOICE="${KOKORO_VOICE:-af_heart}"   # must match tts.voice in config
 # mlx-whisper loads it offline. (The openai/ repo is the PyTorch format and would not load.)
 WHISPER_REPO="${WHISPER_REPO:-mlx-community/whisper-large-v3-turbo}"
 WHISPER_REV="${WHISPER_REV:-main}"
-
-if [ -z "${HF_TOKEN:-}" ] && [ ! -f "${HF_HOME:-$HOME/.cache/huggingface}/token" ]; then
-  echo "WARNING: not signed in to Hugging Face and HF_TOKEN is unset. The description model is private;" >&2
-  echo "         run 'hf auth login' (or export HF_TOKEN) first or that fetch will fail." >&2
-fi
 
 for v in VL_MERGED_REV VL_REV KOKORO_REV WHISPER_REV; do
   if [ "${!v}" = "main" ]; then
