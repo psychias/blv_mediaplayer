@@ -34,7 +34,7 @@ vl:
   # fit (gemma-4-e2b won't load on current mlx-vlm; gemma-3n-E2B OOMs; gemma-3-4b
   # times out). Swap is config-only: repoint at the converted fine-tuned MLX weights.
   # ad4edu-qwen3vl-2b-mm-8bit = Qwen3-VL-2B-Instruct + the AD4Edu LoRA, MULTIMODAL arm
-  # (Psychias/ad4edu-qwen3vl-2b-sft, seed0: trained on keyframe images + OCR + speech,
+  # (Hermeneia/ad4edu-qwen3vl-2b-sft, seed0: trained on keyframe images + OCR + speech,
   # learns the emit/suppress gate) merged and quantised by scripts/merge_adapter.py.
   # 8-bit, not 4-bit: at 4 bits the merged model loses the JSON output contract and
   # rambles (verified on real keyframes); 8-bit is 2.5 GB, ~4 s/moment, peak ~3.8 GB.

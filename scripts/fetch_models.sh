@@ -11,14 +11,15 @@
 #     whisper/              whisper-large-v3-turbo in MLX format (what mlx-whisper loads)
 #
 # With --merge-sources it fetches instead the inputs for re-merging after retraining:
-#     ad4edu-qwen3vl-2b-mm-lora/  AD4Edu LoRA adapter, multimodal arm (private repo)
+#     ad4edu-qwen3vl-2b-mm-lora/  AD4Edu LoRA adapter, multimodal arm (public repo)
 #     qwen3vl-2b-base/         Qwen3-VL-2B-Instruct bf16 base the adapter was trained on
 # then: python scripts/merge_adapter.py --base models/qwen3vl-2b-base \
 #         --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 --out models/ad4edu-qwen3vl-2b-mm-8bit
 #
 # Requires: pip install -e ".[build]"   (huggingface_hub)
 #
-# The description-model repos are PRIVATE: run `hf auth login` (or export HF_TOKEN) first.
+# The merged description model is PRIVATE: run `hf auth login` (or export HF_TOKEN) first.
+# The adapter and every other repo are public.
 #
 # REPRODUCIBILITY: pin exact commit hashes in the *_REV vars below. They default to
 # "main" with a warning — a real release build MUST pin them so every build matches
@@ -36,7 +37,7 @@ VL_MERGED_REV="${VL_MERGED_REV:-main}"
 VL_MERGED_DIR="${VL_MERGED_DIR:-ad4edu-qwen3vl-2b-mm-8bit}"
 
 # Re-merge inputs (--merge-sources only).
-VL_REPO="${VL_REPO:-Psychias/ad4edu-qwen3vl-2b-sft}"   # multimodal arm: keyframe image + OCR
+VL_REPO="${VL_REPO:-Hermeneia/ad4edu-qwen3vl-2b-sft}"   # multimodal arm: keyframe image + OCR (public)
 VL_REV="${VL_REV:-main}"
 VL_DIR="${VL_DIR:-ad4edu-qwen3vl-2b-mm-lora}"
 # Base the adapter was trained on — pinned to the exact revision in the adapter's run_meta.json.

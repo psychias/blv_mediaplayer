@@ -99,8 +99,9 @@ description track, and the run says so with `No slide changes or pointing moment
 synthetic sample has one strong slide change at four seconds, so it produces exactly one
 description.
 
-The description model is `Psychias/ad4edu-qwen3vl-2b-mm-8bit`: the `Psychias/ad4edu-qwen3vl-2b-sft`
-adapter, trained on the AD4Edu corpus, merged into Qwen3-VL-2B-Instruct and quantised to 8-bit MLX.
+The description model is `Psychias/ad4edu-qwen3vl-2b-mm-8bit`: the public
+`Hermeneia/ad4edu-qwen3vl-2b-sft` adapter, trained on the AD4Edu corpus, merged into
+Qwen3-VL-2B-Instruct and quantised to 8-bit MLX.
 It is merged at 8 bits because at 4 bits the merged model stops returning the JSON its training
 expects and produces loose text instead.
 
