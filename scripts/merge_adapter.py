@@ -1,6 +1,8 @@
 """Merge the AD4Edu LoRA adapter into its Qwen3-VL base and convert to 8-bit MLX.
 
-Build-time only (needs torch + peft + mlx-vlm; run after scripts/fetch_models.sh):
+Only needed after the adapter is retrained (needs torch + peft + mlx-vlm; run after
+scripts/fetch_models.sh --merge-sources). Upload the result to the merged-model repository
+(Psychias/ad4edu-qwen3vl-2b-mm-8bit) so every other install fetches it ready to run:
 
     .venv/bin/python scripts/merge_adapter.py \
         --base models/qwen3vl-2b-base \

@@ -30,11 +30,14 @@ documented in [ACCESSIBILITY.md](ACCESSIBILITY.md).
 ## Requirements
 
 - macOS on Apple Silicon, version 14 or later, to run the models.
-- Python 3.11 or later. The examples use `python3.13`; any 3.11+ interpreter works.
+- Python 3.11 or later. The examples use 3.13; any 3.11+ interpreter works.
+- [`uv`](https://docs.astral.sh/uv/), for example `brew install uv`. It installs the Python
+  environment in under a minute and stages the Python for the distributable build. Plain
+  `python -m venv` and `pip` work too, just slower.
 - `ffmpeg` and `ffprobe` on the PATH, for example `brew install ffmpeg`.
-- About 15 GB of free disk while the models are fetched and merged, 10 GB afterwards.
+- About 7 GB of free disk for the models and the environment.
 - 8 GB of RAM is enough. 16 GB is faster, because the models stay loaded between windows.
-- A Hugging Face account, for the one-time model fetch. The description adapter is a private
+- A Hugging Face account, for the one-time model fetch. The description model is a private
   repository.
 
 The pipeline core is plain Python and runs anywhere against mock backends. Only the real models
@@ -46,10 +49,12 @@ Install the developer environment and run the pipeline against mock backends. Th
 no models and no network, and is what the test suite exercises.
 
 ```bash
-python3.13 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv venv --python 3.13 && source .venv/bin/activate
+uv pip install -e ".[dev]"
 ladpipe run --mock --demo
 ```
+
+Without `uv`, `python3.13 -m venv .venv` and `pip install -e ".[dev]"` do the same thing.
 
 That writes a length-matched `.wav`, a `.vtt` with the lecturer cues, a `.desc.vtt` with the
 description cues and a `.json` manifest into `~/Library/Application Support/LectureAD/cache`,
@@ -71,31 +76,21 @@ A cache hit emits a single `cache_hit` event with the same four paths instead of
 
 ## Running a real lecture
 
-Install the model dependencies, fetch the weights once, then merge the adapter into its base model.
+Install the model dependencies and fetch the weights once. About 4.3 GB is downloaded.
 
 ```bash
-pip install -e ".[real,build]"
+uv pip install -e ".[real,build]"
 
-# The adapter repository is private: sign in once, or export HF_TOKEN
+# The description model is private: sign in once, or export HF_TOKEN
 hf auth login
 
-# Fetch the adapter, its base model, Kokoro and Whisper into models/
+# Fetch the description model, Kokoro and Whisper into models/
 scripts/fetch_models.sh
-
-# Merge the adapter into the base and quantise to 8-bit MLX (about 2 minutes, 2.2 GB of RAM)
-pip install peft
-python scripts/merge_adapter.py \
-  --base models/qwen3vl-2b-base \
-  --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 \
-  --out models/ad4edu-qwen3vl-2b-mm-8bit
 
 # Run. config/real.yaml already points at these paths.
 scripts/make_sample_video.sh sample.mp4    # or use your own lecture
 ladpipe run --video sample.mp4 --config config/real.yaml
 ```
-
-The merge deletes its 4 GB bf16 intermediate once the 8-bit weights are written. Pass
-`--keep-merged` to keep it.
 
 Descriptions are only produced where the pipeline finds something to describe: a slide change
 whose ffmpeg scene score exceeds `preprocess.scene_threshold`, or a cursor dwell. The opening
@@ -104,9 +99,28 @@ description track, and the run says so with `No slide changes or pointing moment
 synthetic sample has one strong slide change at four seconds, so it produces exactly one
 description.
 
-The description model is `Psychias/ad4edu-qwen3vl-2b-sft`, an adapter trained on the AD4Edu corpus
-and merged into Qwen3-VL-2B-Instruct. Merge at 8 bits. At 4 bits the merged model stops returning
-the JSON its training expects and produces loose text instead.
+The description model is `Psychias/ad4edu-qwen3vl-2b-mm-8bit`: the `Psychias/ad4edu-qwen3vl-2b-sft`
+adapter, trained on the AD4Edu corpus, merged into Qwen3-VL-2B-Instruct and quantised to 8-bit MLX.
+It is merged at 8 bits because at 4 bits the merged model stops returning the JSON its training
+expects and produces loose text instead.
+
+### Re-merging after retraining
+
+Only needed when the adapter changes. Fetch the adapter and its base instead of the merged model,
+merge and quantise (about 2 minutes, 2.2 GB of RAM, 4 GB of temporary disk), then upload the result
+to the merged-model repository so every other install gets it from `scripts/fetch_models.sh`.
+
+```bash
+scripts/fetch_models.sh --merge-sources
+uv pip install peft
+python scripts/merge_adapter.py \
+  --base models/qwen3vl-2b-base \
+  --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 \
+  --out models/ad4edu-qwen3vl-2b-mm-8bit
+```
+
+The merge deletes its bf16 intermediate once the 8-bit weights are written. Pass `--keep-merged`
+to keep it.
 
 Backends are selected in config, under `backends`: `local` for preprocessing, `mlxvlm` for the
 description model, `kokoro` for speech. A `voxtral` speech backend remains for compatibility but is
@@ -212,8 +226,8 @@ than a forward-only queue, so the viewer can scrub anywhere already prepared.
 any Apple Silicon Mac with nothing installed: no repository, no virtual environment, no Homebrew, no
 model downloads and no network.
 
-Building it needs [`uv`](https://docs.astral.sh/uv/), which stages the relocatable Python, the
-Homebrew `ffmpeg`, and the merged models from the previous section.
+Building it needs `uv`, which stages the relocatable Python, the Homebrew `ffmpeg`, and the
+models fetched in the previous section.
 
 ```bash
 scripts/build_dist.sh
@@ -263,7 +277,7 @@ lecture.
 ```bash
 source .venv/bin/activate     # the scripts below call pytest, ruff and mypy directly
 
-scripts/test.sh               # 123 tests, no GPU and no network
+scripts/test.sh               # 124 tests, no GPU and no network
 scripts/lint.sh               # ruff
 scripts/type.sh               # mypy, strict
 scripts/demo.sh               # ladpipe run --mock --demo

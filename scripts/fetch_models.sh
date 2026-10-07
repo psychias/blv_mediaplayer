@@ -5,18 +5,20 @@
 # Output layout (the app resolves model paths from here, then packaging copies it
 # into the .app bundle's Resources/models/ in Phase 4):
 #   models/
-#     ad4edu-qwen3vl-2b-mm-lora/  AD4Edu LoRA adapter, multimodal arm (private repo; see VL notes below)
-#     qwen3vl-2b-base/         Qwen3-VL-2B-Instruct bf16 base the adapter was trained on
+#     ad4edu-qwen3vl-2b-mm-8bit/  description model: AD4Edu adapter merged into Qwen3-VL-2B,
+#                                 8-bit MLX (private repo), ready to run — no merge step
 #     kokoro/               mlx-community Kokoro-82M build + the af_heart voice pack
 #     whisper/              whisper-large-v3-turbo in MLX format (what mlx-whisper loads)
 #
+# With --merge-sources it fetches instead the inputs for re-merging after retraining:
+#     ad4edu-qwen3vl-2b-mm-lora/  AD4Edu LoRA adapter, multimodal arm (private repo)
+#     qwen3vl-2b-base/         Qwen3-VL-2B-Instruct bf16 base the adapter was trained on
+# then: python scripts/merge_adapter.py --base models/qwen3vl-2b-base \
+#         --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 --out models/ad4edu-qwen3vl-2b-mm-8bit
+#
 # Requires: pip install -e ".[build]"   (huggingface_hub)
 #
-# The VL adapter repo is PRIVATE: run `hf auth login` (or export HF_TOKEN) first. It is a
-# PEFT LoRA, so after fetching, merge + quantise once (needs the [real] extra + peft):
-#   .venv/bin/python scripts/merge_adapter.py --base models/qwen3vl-2b-base \
-#       --adapter models/ad4edu-qwen3vl-2b-mm-lora/seed0 --out models/ad4edu-qwen3vl-2b-mm-8bit
-# and point vl.model at models/ad4edu-qwen3vl-2b-mm-8bit.
+# The description-model repos are PRIVATE: run `hf auth login` (or export HF_TOKEN) first.
 #
 # REPRODUCIBILITY: pin exact commit hashes in the *_REV vars below. They default to
 # "main" with a warning — a real release build MUST pin them so every build matches
@@ -25,7 +27,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODELS_DIR="${MODELS_DIR:-models}"
+MERGE_SOURCES=0
+[ "${1:-}" = "--merge-sources" ] && MERGE_SOURCES=1
 
+# Merged + quantised description model (what config/real.yaml's vl.model points at).
+VL_MERGED_REPO="${VL_MERGED_REPO:-Psychias/ad4edu-qwen3vl-2b-mm-8bit}"
+VL_MERGED_REV="${VL_MERGED_REV:-main}"
+VL_MERGED_DIR="${VL_MERGED_DIR:-ad4edu-qwen3vl-2b-mm-8bit}"
+
+# Re-merge inputs (--merge-sources only).
 VL_REPO="${VL_REPO:-Psychias/ad4edu-qwen3vl-2b-sft}"   # multimodal arm: keyframe image + OCR
 VL_REV="${VL_REV:-main}"
 VL_DIR="${VL_DIR:-ad4edu-qwen3vl-2b-mm-lora}"
@@ -43,11 +53,11 @@ WHISPER_REPO="${WHISPER_REPO:-mlx-community/whisper-large-v3-turbo}"
 WHISPER_REV="${WHISPER_REV:-main}"
 
 if [ -z "${HF_TOKEN:-}" ] && [ ! -f "${HF_HOME:-$HOME/.cache/huggingface}/token" ]; then
-  echo "WARNING: not signed in to Hugging Face and HF_TOKEN is unset. $VL_REPO is private;" >&2
+  echo "WARNING: not signed in to Hugging Face and HF_TOKEN is unset. The description model is private;" >&2
   echo "         run 'hf auth login' (or export HF_TOKEN) first or that fetch will fail." >&2
 fi
 
-for v in VL_REV KOKORO_REV WHISPER_REV; do
+for v in VL_MERGED_REV VL_REV KOKORO_REV WHISPER_REV; do
   if [ "${!v}" = "main" ]; then
     echo "WARNING: $v is 'main' (not pinned). Pin a commit hash for a reproducible release build." >&2
   fi
@@ -71,8 +81,12 @@ PY
 }
 
 mkdir -p "$MODELS_DIR"
-fetch "$VL_REPO"      "$VL_REV"      "$VL_DIR"
-fetch "$VL_BASE_REPO" "$VL_BASE_REV" "qwen3vl-2b-base"
+if [ "$MERGE_SOURCES" = 1 ]; then
+  fetch "$VL_REPO"      "$VL_REV"      "$VL_DIR"
+  fetch "$VL_BASE_REPO" "$VL_BASE_REV" "qwen3vl-2b-base"
+else
+  fetch "$VL_MERGED_REPO" "$VL_MERGED_REV" "$VL_MERGED_DIR"
+fi
 fetch "$KOKORO_REPO"  "$KOKORO_REV"  "kokoro" "config.json" "kokoro-v1_0.safetensors" "voices/$KOKORO_VOICE.safetensors"
 fetch "$WHISPER_REPO" "$WHISPER_REV" "whisper"
 
@@ -87,7 +101,11 @@ print("   done: en_core_web_sm")
 PY
 
 echo
-echo "All models fetched into '$MODELS_DIR/'. Point config at them, e.g.:"
-echo "  vl.model:               $MODELS_DIR/ad4edu-qwen3vl-2b-mm-8bit   (after scripts/merge_adapter.py, see header)"
+echo "All models fetched into '$MODELS_DIR/'. config/real.yaml already points at them:"
+if [ "$MERGE_SOURCES" = 1 ]; then
+  echo "  vl.model:               $MODELS_DIR/$VL_MERGED_DIR   (after scripts/merge_adapter.py, see header)"
+else
+  echo "  vl.model:               $MODELS_DIR/$VL_MERGED_DIR"
+fi
 echo "  tts.kokoro.model_path:  $MODELS_DIR/kokoro    (tts.voice: $KOKORO_VOICE)"
 echo "  preprocess.whisper_model: $MODELS_DIR/whisper"
