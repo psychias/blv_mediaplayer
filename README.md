@@ -30,9 +30,12 @@ documented in [ACCESSIBILITY.md](ACCESSIBILITY.md).
 ## Requirements
 
 - macOS on Apple Silicon, version 14 or later, to run the models.
-- Python 3.11 or later.
-- About 10 GB of disk for the models.
+- Python 3.11 or later. The examples use `python3.13`; any 3.11+ interpreter works.
+- `ffmpeg` and `ffprobe` on the PATH, for example `brew install ffmpeg`.
+- About 15 GB of free disk while the models are fetched and merged, 10 GB afterwards.
 - 8 GB of RAM is enough. 16 GB is faster, because the models stay loaded between windows.
+- A Hugging Face account, for the one-time model fetch. The description adapter is a private
+  repository.
 
 The pipeline core is plain Python and runs anywhere against mock backends. Only the real models
 require Apple Silicon.
@@ -48,29 +51,38 @@ pip install -e ".[dev]"
 ladpipe run --mock --demo
 ```
 
-That writes a length-matched `.wav`, a `.vtt` with both lecturer and description cues, and a
-`.json` manifest into `~/Library/Application Support/LectureAD/cache`, then prints how the
-descriptions were placed. Running it again is a cache hit.
+That writes a length-matched `.wav`, a `.vtt` with the lecturer cues, a `.desc.vtt` with the
+description cues and a `.json` manifest into `~/Library/Application Support/LectureAD/cache`,
+then prints how the descriptions were placed. Running it again is a cache hit. If that folder
+already holds artifacts from an earlier install, the very first run is a cache hit too.
 
 The macOS app drives the same command as a sidecar and reads newline-delimited JSON events:
 
 ```bash
 ladpipe run --mock --demo --json
+# {"event":"progress","stage":"preprocess","pct":0.6,"label":"Detecting moments"}
 # {"event":"progress","stage":"vl","pct":0.5,"label":"Describing moments"}
-# {"event":"done","artifact":".../<hash>.wav","captions":".../<hash>.vtt","manifest":".../<hash>.json"}
+# {"event":"progress","stage":"tts","pct":0.5,"label":"Synthesising audio description"}
+# {"event":"done","artifact":".../<hash>.wav","captions":".../<hash>.vtt",
+#  "descriptions":".../<hash>.desc.vtt","manifest":".../<hash>.json"}
 ```
+
+A cache hit emits a single `cache_hit` event with the same four paths instead of `done`.
 
 ## Running a real lecture
 
 Install the model dependencies, fetch the weights once, then merge the adapter into its base model.
 
 ```bash
-pip install -e ".[real]" ".[build]"
+pip install -e ".[real,build]"
+
+# The adapter repository is private: sign in once, or export HF_TOKEN
+hf auth login
 
 # Fetch the adapter, its base model, Kokoro and Whisper into models/
 scripts/fetch_models.sh
 
-# Merge the adapter into the base and quantise to 8-bit MLX
+# Merge the adapter into the base and quantise to 8-bit MLX (about 2 minutes, 2.2 GB of RAM)
 pip install peft
 python scripts/merge_adapter.py \
   --base models/qwen3vl-2b-base \
@@ -81,6 +93,16 @@ python scripts/merge_adapter.py \
 scripts/make_sample_video.sh sample.mp4    # or use your own lecture
 ladpipe run --video sample.mp4 --config config/real.yaml
 ```
+
+The merge deletes its 4 GB bf16 intermediate once the 8-bit weights are written. Pass
+`--keep-merged` to keep it.
+
+Descriptions are only produced where the pipeline finds something to describe: a slide change
+whose ffmpeg scene score exceeds `preprocess.scene_threshold`, or a cursor dwell. The opening
+frame is never described. A video with no such moments prepares successfully with an empty
+description track, and the run says so with `No slide changes or pointing moments found`. The
+synthetic sample has one strong slide change at four seconds, so it produces exactly one
+description.
 
 The description model is `Psychias/ad4edu-qwen3vl-2b-sft`, an adapter trained on the AD4Edu corpus
 and merged into Qwen3-VL-2B-Instruct. Merge at 8 bits. At 4 bits the merged model stops returning
@@ -135,6 +157,14 @@ app/build_app.sh                       # produces app/build/LectureAD.app, ad-ho
 open app/build/LectureAD.app
 ```
 
+The build bakes the paths of this checkout's `.venv/bin/ladpipe` and `config/real.yaml` into the
+bundle, so opening a lecture needs the real models from the previous section. To try the interface
+before the models are set up, run the binary directly with the mock backends:
+
+```bash
+LADPIPE_MOCK=1 app/build/LectureAD.app/Contents/MacOS/LectureAD
+```
+
 The app opens a lecture, shows preparation progress announced through VoiceOver, then plays the
 video frames against the cached enhanced audio. Captions appear as two tracks, lecturer and
 description, which toggle independently. Description cues are styled distinctly so they are never
@@ -164,7 +194,9 @@ ladpipe stream --video sample.mp4 --config config/real.yaml --window 90 --lookah
 
 On an 8 GB machine the first window is ready in about 3.3 minutes, against roughly 24 minutes to
 prepare a 90-minute lecture in full. `--lookahead` bounds how far ahead of the viewer the pipeline
-works, so it does not occupy the GPU during playback.
+works, so it does not occupy the GPU during playback. The app grants one more window by writing a
+line to the sidecar's stdin as the playhead advances. Run from a terminal, where stdin is not a
+player, the command prepares every window and exits.
 
 On 16 GB or more the models stay loaded across windows. On 8 GB they load one at a time per window,
 so three MLX models never sit in memory together. On 8 GB with a verbose model, preparing a window
@@ -179,6 +211,9 @@ than a forward-only queue, so the viewer can scrub anywhere already prepared.
 `scripts/build_dist.sh` assembles a self-contained `dist/LectureAD.app` of about 5.9 GB that runs on
 any Apple Silicon Mac with nothing installed: no repository, no virtual environment, no Homebrew, no
 model downloads and no network.
+
+Building it needs [`uv`](https://docs.astral.sh/uv/), which stages the relocatable Python, the
+Homebrew `ffmpeg`, and the merged models from the previous section.
 
 ```bash
 scripts/build_dist.sh
@@ -233,8 +268,11 @@ scripts/lint.sh               # ruff
 scripts/type.sh               # mypy, strict
 scripts/demo.sh               # ladpipe run --mock --demo
 scripts/contrast_audit.py     # checks every app colour against WCAG AA
-scripts/analyze_gap_fit.py    # regenerates analysis/gap_fit_report.md
 ```
+
+`scripts/analyze_gap_fit.py` produced [analysis/gap_fit_report.md](analysis/gap_fit_report.md).
+It reads ffmpeg scene-detection and `silencedetect` output for a real lecture, so it takes
+arguments; its docstring shows the exact commands.
 
 The mock backends are interchangeable with the real ones, so a passing test suite exercises the same
 orchestration the real path uses. Heavy libraries are imported inside their backends, which keeps

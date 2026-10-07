@@ -112,6 +112,7 @@ def _print_summary(result: PipelineResult) -> None:
     print(f"  captions:     {result.captions_path}")
     print(f"  descriptions: {result.descriptions_path}")
     print(f"  manifest:     {result.manifest_path}")
+    print(f"  described:    {sum(result.rung_counts.values())} line(s)")
     print(f"  rungs:        {spread}  (r0 = extended-AD pause)")
     print(f"  suppressed:   {len(result.suppressed_moment_ids)} moment(s)")
 
@@ -126,14 +127,21 @@ class _StdinCreditPacer:
         import threading
 
         self._sem = threading.Semaphore(initial)
+        self._closed = False
         reader = threading.Thread(target=self._read_credits, daemon=True)
         reader.start()
 
     def _read_credits(self) -> None:
         for _ in sys.stdin:  # each line from the app = one more window of headroom
             self._sem.release()
+        # stdin closed: no player is pacing us (a terminal run, or the app went away), so
+        # stop holding windows back instead of blocking forever after ``initial`` of them.
+        self._closed = True
+        self._sem.release()
 
     def wait(self, index: int) -> None:
+        if self._closed:
+            return
         self._sem.acquire()
 
 

@@ -21,6 +21,8 @@ APP="${1:-$REPO/dist/LectureAD.app}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.13}"
 VL_MODEL="${VL_MODEL:-models/ad4edu-qwen3vl-2b-mm-8bit}"
 KOKORO_MODEL="${KOKORO_MODEL:-models/kokoro}"
+WHISPER_MODEL="${WHISPER_MODEL:-models/whisper}"   # MLX weights from scripts/fetch_models.sh
+# Fallback only: the Hugging Face cache entry a repo-id config would have pulled on first run.
 WHISPER_REPO_DIR="${WHISPER_REPO_DIR:-$HOME/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo}"
 
 command -v uv >/dev/null || { echo "uv is required (https://docs.astral.sh/uv/)" >&2; exit 1; }
@@ -63,7 +65,9 @@ echo ">> 4/8 copying models (this is the bulk of the bundle)"
 mkdir -p "$RES/models"
 cp -R "$VL_MODEL"     "$RES/models/$(basename "$VL_MODEL")"
 cp -R "$KOKORO_MODEL" "$RES/models/kokoro"
-if [ -d "$WHISPER_REPO_DIR" ]; then
+if [ -f "$WHISPER_MODEL/config.json" ]; then
+  cp -R "$WHISPER_MODEL" "$RES/models/whisper"
+elif [ -d "$WHISPER_REPO_DIR" ]; then
   SNAP="$(find "$WHISPER_REPO_DIR/snapshots" -mindepth 1 -maxdepth 1 -type d | head -1)"
   cp -RL "$SNAP" "$RES/models/whisper"        # -L: the HF cache stores files as symlinks
 else

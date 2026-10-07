@@ -296,6 +296,10 @@ class RealPreprocessor:
 
     def _transcribe(self, wav: Path) -> list[Segment]:
         model_ref = self._cfg.preprocess.whisper_model
+        if model_ref.startswith((".", "/", "~")) and not Path(model_ref).expanduser().exists():
+            raise FileNotFoundError(
+                f"whisper model directory not found: {model_ref} (run scripts/fetch_models.sh)"
+            )
         if self._cfg.preprocess.whisper_backend == "mlx":
             # mlx-whisper runs on the GPU (Apple Silicon) — much faster than CPU openai-whisper.
             # It runs in a CHILD process: once it has run in-process, later mlx-vlm

@@ -52,6 +52,12 @@ class PrepareThenCacheOrchestrator:
         # drops it too): with always-pause it would pause the video the instant playback
         # starts, and merge_adjacent would anchor its line at 0.0.
         moments = [m for m in moments if m.t_start >= 1.0]
+        if not moments:
+            # Nothing crossed scene_threshold and no cursor dwell was found. Say so: an
+            # empty description track otherwise looks identical to a silently failing model.
+            progress.progress(
+                "vl", 1.0, "No slide changes or pointing moments found; nothing to describe"
+            )
 
         # --- VL stage (load vision, run the per-moment loop, then release) ---
         vl = build_vl(cfg)

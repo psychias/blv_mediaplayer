@@ -107,7 +107,7 @@ final class StreamingPlayer: ObservableObject {
         // exactly what happens when a window arrives at/after the end of the prepared range.
         player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             guard let self, resume else { return }
-            self.play()
+            Task { @MainActor in self.play() }
         }
     }
 

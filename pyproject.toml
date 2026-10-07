@@ -57,6 +57,7 @@ dev = [
     "mypy>=1.11",
     "pytest>=8.0",
     "types-PyYAML>=6.0",
+    "pillow>=10.0",  # tests/test_pointing.py renders a frame to check draw_pointer
 ]
 
 [project.scripts]
@@ -82,6 +83,7 @@ module = [
     "whisper.*", "mlx_whisper.*", "mlx_vlm.*", "mlx_audio.*", "silero_vad.*", "imagehash.*",
     "PIL.*", "Vision.*", "Quartz.*", "Foundation.*", "huggingface_hub.*",
     "misaki.*", "espeakng_loader.*", "phonemizer.*",
+    "numpy.*", "torch.*", "mlx.*",
 ]
 ignore_missing_imports = true
 

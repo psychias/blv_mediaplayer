@@ -46,7 +46,10 @@ vl:
 
 preprocess:
   whisper_backend: mlx   # GPU on Apple Silicon — the big first-open speed-up
-  whisper_model: mlx-community/whisper-large-v3-turbo
+  # Local MLX weights fetched by scripts/fetch_models.sh, so no run ever touches the network.
+  # A Hugging Face repo id (mlx-community/whisper-large-v3-turbo) also works but downloads on
+  # first use.
+  whisper_model: ../models/whisper
   scene_threshold: 0.15  # 0.3 missed 15 of 41 real slide changes on a Pearson deck (two of them
                          # figures); at 0.15 every extra change was a real slide, none cursor noise.
                          # phash dedup still drops near-duplicates.

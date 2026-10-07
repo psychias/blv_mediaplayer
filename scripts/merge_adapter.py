@@ -28,6 +28,8 @@ def main() -> None:
     ap.add_argument("--adapter", required=True, help="PEFT LoRA adapter dir (adapter_config.json)")
     ap.add_argument("--out", required=True, help="output dir for the quantised MLX weights")
     ap.add_argument("--q-bits", type=int, default=8, help="quantisation bits (default 8)")
+    ap.add_argument("--keep-merged", action="store_true",
+                    help="keep the bf16 merged checkpoint (~4 GB) next to the output")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -64,7 +66,11 @@ def main() -> None:
          "--mlx-path", str(out), "-q", "--q-bits", str(args.q_bits), "--q-group-size", "64"],
         check=True,
     )
-    print(f"done: {out}  (merged bf16 kept at {merged}; delete it to free ~4.4 GB)")
+    if args.keep_merged:
+        print(f"done: {out}  (merged bf16 kept at {merged})")
+    else:
+        shutil.rmtree(merged)
+        print(f"done: {out}  (bf16 intermediate removed; pass --keep-merged to keep it)")
 
 
 if __name__ == "__main__":

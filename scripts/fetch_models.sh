@@ -8,7 +8,7 @@
 #     ad4edu-qwen3vl-2b-mm-lora/  AD4Edu LoRA adapter, multimodal arm (private repo; see VL notes below)
 #     qwen3vl-2b-base/         Qwen3-VL-2B-Instruct bf16 base the adapter was trained on
 #     kokoro/               mlx-community Kokoro-82M build + the af_heart voice pack
-#     whisper/              whisper turbo weights
+#     whisper/              whisper-large-v3-turbo in MLX format (what mlx-whisper loads)
 #
 # Requires: pip install -e ".[build]"   (huggingface_hub)
 #
@@ -37,8 +37,15 @@ KOKORO_REPO="${KOKORO_REPO:-mlx-community/Kokoro-82M-bf16}"
 KOKORO_REV="${KOKORO_REV:-main}"
 KOKORO_VOICE="${KOKORO_VOICE:-af_heart}"   # must match tts.voice in config
 
-WHISPER_REPO="${WHISPER_REPO:-openai/whisper-large-v3-turbo}"
+# MLX-format weights: config/real.yaml points preprocess.whisper_model at this directory and
+# mlx-whisper loads it offline. (The openai/ repo is the PyTorch format and would not load.)
+WHISPER_REPO="${WHISPER_REPO:-mlx-community/whisper-large-v3-turbo}"
 WHISPER_REV="${WHISPER_REV:-main}"
+
+if [ -z "${HF_TOKEN:-}" ] && [ ! -f "${HF_HOME:-$HOME/.cache/huggingface}/token" ]; then
+  echo "WARNING: not signed in to Hugging Face and HF_TOKEN is unset. $VL_REPO is private;" >&2
+  echo "         run 'hf auth login' (or export HF_TOKEN) first or that fetch will fail." >&2
+fi
 
 for v in VL_REV KOKORO_REV WHISPER_REV; do
   if [ "${!v}" = "main" ]; then
@@ -83,4 +90,4 @@ echo
 echo "All models fetched into '$MODELS_DIR/'. Point config at them, e.g.:"
 echo "  vl.model:               $MODELS_DIR/ad4edu-qwen3vl-2b-mm-8bit   (after scripts/merge_adapter.py, see header)"
 echo "  tts.kokoro.model_path:  $MODELS_DIR/kokoro    (tts.voice: $KOKORO_VOICE)"
-echo "  preprocess.whisper_model: turbo   (or a path under $MODELS_DIR/whisper)"
+echo "  preprocess.whisper_model: $MODELS_DIR/whisper"

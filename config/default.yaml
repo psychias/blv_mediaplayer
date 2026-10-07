@@ -49,7 +49,7 @@ vl:
 preprocess:
   # Real backend (local) only; mock ignores these. All feed the cache key.
   whisper_backend: mlx            # mlx (GPU, Apple Silicon, ~10x faster) | openai (CPU fallback)
-  whisper_model: mlx-community/whisper-large-v3-turbo  # for openai, use "turbo" instead
+  whisper_model: ../models/whisper   # MLX weights from scripts/fetch_models.sh; for openai, "turbo"
   scene_threshold: 0.3            # ffmpeg scene-change sensitivity (0-1)
   keyframe_dedup_max_distance: 5  # perceptual-hash hamming distance to drop duplicate slides
   transcript_pad_s: 2.0           # seconds of transcript context around each moment
