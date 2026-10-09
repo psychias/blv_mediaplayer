@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Offline lecture audio-description pipeline for blind and low-vision students."
 requires-python = ">=3.11"
 readme = "README.md"
+license = {text = "Apache-2.0"}
 # Core runtime deps are deliberately tiny: the mock path (and the whole
 # orchestration core) must import and run with NO heavy/GPU/network deps.
 # PyYAML is the only core dep — config files and the slide-AD rules are YAML.

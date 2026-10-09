@@ -289,6 +289,11 @@ The mock backends are interchangeable with the real ones, so a passing test suit
 orchestration the real path uses. Heavy libraries are imported inside their backends, which keeps
 the mock path free of them.
 
+## Licence
+
+LectureAD is released under the Apache License 2.0; see `LICENSE`. The models it downloads have
+their own terms, listed below.
+
 ## Model licences
 
 - **Qwen3-VL-2B-Instruct**, with the AD4Edu adapter merged in: Apache 2.0.
